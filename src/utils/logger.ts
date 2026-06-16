@@ -49,7 +49,8 @@ export type Component =
   | 'TELEGRAM'
   | 'TRANSCRIPT'
   | 'WINDSURF'
-  | 'WORKER';
+  | 'WORKER'
+  | 'ZCODE';
 
 interface LogContext {
   sessionId?: string | number;

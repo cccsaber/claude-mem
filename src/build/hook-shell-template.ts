@@ -21,7 +21,7 @@
  *   4. $_C/plugins/marketplaces/thedotmack/plugin (marketplace install)
  */
 
-export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'mcp';
+export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'zcode-cli' | 'mcp';
 
 export interface ShellTemplateOptions {
   /** Host whose spawn contract / PATH prelude applies. */
@@ -79,6 +79,11 @@ function pathPrelude(host: ShellTemplateHost): string {
       // Trailing space is intentional: join() adds one more → double space
       // before `_C=`, matching the hand-authored codex-hooks.json.
       return CODEX_CLI_PATH_PRELUDE;
+    case 'zcode-cli':
+      // ZCode is a Claude-Code-derived kernel and resolves PATH the same way
+      // (its host shell is also bash, with the same Git-Bash-on-Windows
+      // discovery story). Reuse the claude-code prelude verbatim.
+      return CLAUDE_CODE_PATH_PRELUDE;
     case 'mcp':
       return '';
   }

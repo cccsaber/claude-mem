@@ -61,8 +61,10 @@ describe('Plugin Distribution - Required Files', () => {
   const requiredFiles = [
     'plugin/hooks/hooks.json',
     'plugin/hooks/codex-hooks.json',
+    'plugin/hooks/zcode-hooks.json',
     'plugin/.claude-plugin/plugin.json',
     'plugin/.codex-plugin/plugin.json',
+    'plugin/.zcode-plugin/plugin.json',
     'plugin/.mcp.json',
     'plugin/skills/mem-search/SKILL.md',
     '.agents/plugins/marketplace.json',
@@ -189,6 +191,47 @@ describe('Plugin Distribution - package.json Files Field', () => {
   });
 });
 
+describe('Plugin Distribution - ZCode Hooks', () => {
+  // ZCode's matcher function compiles the value as a RegExp: new RegExp(t).
+  // "*" throws "Nothing to repeat", which the matcher swallows in a catch and
+  // returns false → the hook NEVER fires. This guard prevents that regression.
+  it('PostToolUse uses a RegExp-valid matcher (never "*")', () => {
+    const parsed = readJson('plugin/hooks/zcode-hooks.json');
+    const postToolUseGroups: any[] = parsed.hooks?.PostToolUse ?? [];
+    expect(postToolUseGroups.length).toBeGreaterThan(0);
+    for (const group of postToolUseGroups) {
+      expect(group.matcher).not.toBe('*');
+      // Every matcher that is present must compile as a RegExp.
+      if (typeof group.matcher === 'string') {
+        expect(() => new RegExp(group.matcher)).not.toThrow();
+      }
+    }
+  });
+
+  it('all zcode hook commands route to the zcode platform adapter', () => {
+    for (const command of commandHooksFrom('plugin/hooks/zcode-hooks.json')) {
+      // The non-start commands are `... hook zcode <event>`; the SessionStart
+      // bootstrap is `... start` (no platform arg). Both must resolve the
+      // plugin scripts the same way as claude-code/codex.
+      expect(command).toContain('${CLAUDE_CONFIG_DIR:-$HOME/.claude}');
+      expect(command).toContain('while IFS= read -r _R');
+      expect(command).toContain('$_C/plugins/cache/thedotmack/claude-mem');
+    }
+  });
+
+  it('SessionStart bootstrap and context hooks target the zcode platform', () => {
+    const parsed = readJson('plugin/hooks/zcode-hooks.json');
+    const sessionStartGroups: any[] = parsed.hooks?.SessionStart ?? [];
+    const commands = sessionStartGroups.flatMap((g: any) =>
+      (g.hooks ?? []).filter((h: any) => h.type === 'command').map((h: any) => String(h.command ?? ''))
+    );
+    // First command bootstraps the worker; second injects zcode context.
+    expect(commands.length).toBeGreaterThanOrEqual(2);
+    expect(commands[0]).toContain('"$_P/scripts/worker-service.cjs" start');
+    expect(commands[1]).toContain('hook zcode context');
+  });
+});
+
 describe('Plugin Distribution - Build Script Verification', () => {
   it('should verify distribution files in build-hooks.js', () => {
     const buildScriptPath = path.join(projectRoot, 'scripts/build-hooks.js');
@@ -245,6 +288,10 @@ const codexHook = (tail: string[]) => buildShellCommand({
   host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
   trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found',
 });
+const zcodeHook = (tail: string[], extra: Record<string, unknown> = {}) => buildShellCommand({
+  host: 'zcode-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
+  trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found', ...extra,
+});
 
 const RULE_A_EXPECTATIONS: Record<string, Record<string, string>> = {
   'plugin/hooks/hooks.json': {
@@ -272,6 +319,18 @@ const RULE_A_EXPECTATIONS: Record<string, Record<string, string>> = {
     'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
     'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
     'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
+  },
+  'plugin/hooks/zcode-hooks.json': {
+    // ZCode (Claude-Code-derived kernel) SessionStart: bootstrap the worker
+    // (with the continue/suppressOutput marker), then inject context. No
+    // Setup/version-check step. PostToolUse uses matcher ".*" (not "*") because
+    // ZCode compiles the matcher as a RegExp and "*" throws (silently swallowed).
+    'SessionStart.0.0': zcodeHook(['start'], { trailingJson: { continue: true, suppressOutput: true } }),
+    'SessionStart.0.1': zcodeHook(['hook', 'zcode', 'context']),
+    'UserPromptSubmit.0.0': zcodeHook(['hook', 'zcode', 'session-init']),
+    'PreToolUse.0.0': zcodeHook(['hook', 'zcode', 'file-context']),
+    'PostToolUse.0.0': zcodeHook(['hook', 'zcode', 'observation']),
+    'Stop.0.0': zcodeHook(['hook', 'zcode', 'summarize']),
   },
 };
 

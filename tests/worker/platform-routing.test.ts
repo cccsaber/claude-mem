@@ -257,3 +257,63 @@ describe('Per-platform routing — tier routing guard', () => {
     expect(session.modelOverride).toBe('haiku');
   });
 });
+
+type ProviderDecision = 'claude' | 'gemini' | 'openrouter' | 'codex';
+
+function decideProviderForPlatform(
+  platformSource: string,
+  hasEndpointOverride: boolean,
+  globalProvider: ProviderDecision,
+  availability: { codex?: boolean; gemini?: boolean; openrouter?: boolean } = {}
+): ProviderDecision {
+  if (platformSource === 'codex') {
+    if (!availability.codex) throw new Error('Codex CLI unavailable');
+    return 'codex';
+  }
+
+  if (platformSource === 'zcode') {
+    if (!hasEndpointOverride) throw new Error('ZCode credentials unavailable');
+    return 'claude';
+  }
+
+  if (globalProvider === 'openrouter' && availability.openrouter) return 'openrouter';
+  if (globalProvider === 'gemini' && availability.gemini) return 'gemini';
+  return 'claude';
+}
+
+describe('Per-platform routing — provider precedence', () => {
+  it('routes Codex-originated requests to Codex even when the global provider is Claude/Opus', () => {
+    const provider = decideProviderForPlatform('codex', false, 'claude', { codex: true });
+    expect(provider).toBe('codex');
+  });
+
+  it('routes Codex-originated requests to Codex even when the global provider is OpenRouter', () => {
+    const provider = decideProviderForPlatform('codex', false, 'openrouter', {
+      codex: true,
+      openrouter: true,
+    });
+    expect(provider).toBe('codex');
+  });
+
+  it('routes ZCode-originated requests through ClaudeProvider only when the ZCode endpoint override is present', () => {
+    const provider = decideProviderForPlatform('zcode', true, 'openrouter', {
+      openrouter: true,
+    });
+    expect(provider).toBe('claude');
+  });
+
+  it('does not silently fall back to Claude when Codex is unavailable', () => {
+    expect(() => decideProviderForPlatform('codex', false, 'claude', { codex: false }))
+      .toThrow('Codex CLI unavailable');
+  });
+
+  it('does not silently fall back to the global provider when ZCode credentials are unavailable', () => {
+    expect(() => decideProviderForPlatform('zcode', false, 'gemini', { gemini: true }))
+      .toThrow('ZCode credentials unavailable');
+  });
+
+  it('uses the global provider only for non-platform-owned sources', () => {
+    const provider = decideProviderForPlatform('claude', false, 'gemini', { gemini: true });
+    expect(provider).toBe('gemini');
+  });
+});

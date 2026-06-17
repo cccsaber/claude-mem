@@ -133,7 +133,6 @@ function shellTemplateManifest(buildShellCommand) {
         // no trailingCommand is needed (it is ignored for this host).
         host: 'mcp', requireFile: 'mcp-server.cjs',
         notFoundMessage: 'claude-mem: mcp server not found',
-        mcpExtraCandidates: ['$PWD/plugin', '$PWD'],
         mcpExtraCacheRoots: [
           '$HOME/.codex/plugins/cache/claude-mem-local/claude-mem',
           '$HOME/.codex/plugins/cache/thedotmack/claude-mem',

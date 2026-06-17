@@ -10,6 +10,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider, isGeminiSelected, isGeminiAvailable } from '../../GeminiProvider.js';
 import { OpenRouterProvider, isOpenRouterSelected, isOpenRouterAvailable } from '../../OpenRouterProvider.js';
+import { CodexProvider, isCodexAvailable } from '../../CodexProvider.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SessionEventBroadcaster } from '../../events/SessionEventBroadcaster.js';
@@ -26,6 +27,7 @@ import { getUptimeSeconds } from '../../../../shared/uptime.js';
 import { USER_PROMPT_DEDUPE_WINDOW_MS } from '../../../../shared/user-prompts.js';
 
 const MAX_USER_PROMPT_BYTES = 256 * 1024;
+type WorkerProviderId = 'claude' | 'gemini' | 'openrouter' | 'codex';
 
 /**
  * Collapse session.abortReason onto a closed telemetry enum. The raw value can
@@ -53,6 +55,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private sdkAgent: ClaudeProvider,
     private geminiAgent: GeminiProvider,
     private openRouterAgent: OpenRouterProvider,
+    private codexAgent: CodexProvider,
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
@@ -60,27 +63,24 @@ export class SessionRoutes extends BaseRouteHandler {
     super();
   }
 
-  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider {
-    if (isOpenRouterSelected()) {
-      if (isOpenRouterAvailable()) {
-        logger.debug('SESSION', 'Using OpenRouter agent');
-        return this.openRouterAgent;
-      } else {
-        throw new Error('OpenRouter provider selected but no API key configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
+  private getSelectedProvider(session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>): WorkerProviderId {
+    // Platform source wins over global settings. A Codex/ZCode-originated hook
+    // must use that platform's own logged-in model path; falling back to the
+    // global Claude/Gemini/OpenRouter provider burns the wrong quota.
+    if (session.platformSource === 'codex') {
+      if (isCodexAvailable()) {
+        return 'codex';
       }
+      throw new Error('Codex platform request received, but Codex CLI was not found. Install/login to Codex so claude-mem can reuse Codex login state.');
     }
-    if (isGeminiSelected()) {
-      if (isGeminiAvailable()) {
-        logger.debug('SESSION', 'Using Gemini agent');
-        return this.geminiAgent;
-      } else {
-        throw new Error('Gemini provider selected but no API key configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
-      }
-    }
-    return this.sdkAgent;
-  }
 
-  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
+    if (session.platformSource === 'zcode') {
+      if (session.endpointOverride) {
+        return 'claude';
+      }
+      throw new Error('ZCode platform request received, but ZCode model/credentials were not available. Configure CLAUDE_MEM_ZCODE_MODEL and login/configure ZCode BigModel credentials.');
+    }
+
     if (isOpenRouterSelected() && isOpenRouterAvailable()) {
       return 'openrouter';
     }
@@ -91,13 +91,16 @@ export class SessionRoutes extends BaseRouteHandler {
     const session = this.sessionManager.getSession(sessionDbId);
     if (!session) return;
 
-    const selectedProvider = this.getSelectedProvider();
+    // Platform routing is the first decision layer: it prepares ZCode's
+    // model+endpoint override before provider selection, and lets Codex bypass
+    // the shared provider setting entirely.
+    await this.applyPlatformRouting(session);
+    const selectedProvider = this.getSelectedProvider(session);
 
     if (!session.generatorPromise) {
       // Platform routing runs BEFORE tier routing: a platform that owns its
       // endpoint+model (e.g. zcode → bigmodel) must not have its modelOverride
       // clobbered by tier routing. applyTierRouting self-guards against this.
-      await this.applyPlatformRouting(session);
       await this.applyTierRouting(session);
       await this.startGeneratorWithProvider(session, selectedProvider, source);
       return;
@@ -117,7 +120,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter',
+    provider: WorkerProviderId,
     source: string
   ): Promise<void> {
     if (!session) return;
@@ -129,8 +132,22 @@ export class SessionRoutes extends BaseRouteHandler {
       session.abortController = new AbortController();
     }
 
-    const agent = provider === 'openrouter' ? this.openRouterAgent : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
-    const agentName = provider === 'openrouter' ? 'OpenRouter' : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
+    const agent =
+      provider === 'codex'
+        ? this.codexAgent
+        : provider === 'openrouter'
+          ? this.openRouterAgent
+          : provider === 'gemini'
+            ? this.geminiAgent
+            : this.sdkAgent;
+    const agentName =
+      provider === 'codex'
+        ? 'Codex'
+        : provider === 'openrouter'
+          ? 'OpenRouter'
+          : provider === 'gemini'
+            ? 'Gemini'
+            : 'Claude SDK';
 
     const actualQueueDepth = this.sessionManager.getMessageBuffer().getPendingCount(session.sessionDbId);
 

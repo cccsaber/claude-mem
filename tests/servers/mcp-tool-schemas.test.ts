@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test';
+import { fileURLToPath } from 'node:url';
 
-const mcpServerPath = new URL('../../src/servers/mcp-server.ts', import.meta.url).pathname;
+const mcpServerPath = fileURLToPath(new URL('../../src/servers/mcp-server.ts', import.meta.url));
 
 describe('MCP tool inputSchema declarations', () => {
   let tools: any[];
@@ -50,6 +51,21 @@ describe('MCP tool inputSchema declarations', () => {
     expect(section).toContain('content:');
     expect(section).toContain("required: ['content']");
     expect(section).toContain('handleObservationAdd');
+    expect(section).toContain('/api/memory/save');
+    expect(section).toContain('/v1/memories');
+    expect(section).not.toContain('Server-beta runtime only');
+  });
+
+  it('observation_add routes worker runtime writes to the worker memory endpoint', async () => {
+    const src = await Bun.file(mcpServerPath).text();
+    const section = src.slice(
+      src.indexOf('async function handleObservationAdd'),
+      src.indexOf('interface ObservationRecordEventArgs'),
+    );
+    expect(section).toContain('resolveServerBetaToolContext');
+    expect(section).toContain("callWorkerAPIPost('/api/memory/save'");
+    expect(section).toContain('buildWorkerMemorySaveRequest');
+    expect(section).not.toContain("requireServerBetaForObservationTool('observation_add')");
   });
 
   it('observation_record_event declares eventType as required', async () => {
@@ -99,6 +115,9 @@ describe('MCP tool inputSchema declarations', () => {
     // observation_* tools, otherwise we have two write paths in MCP.
     const memoryAdd = src.slice(src.indexOf("name: 'memory_add'"), src.indexOf("name: 'memory_search'"));
     expect(memoryAdd).toContain('handleObservationAdd');
+    expect(memoryAdd).toContain('/api/memory/save');
+    expect(memoryAdd).toContain('anyOf:');
+    expect(memoryAdd).not.toContain("required: ['projectId']");
     const memorySearch = src.slice(src.indexOf("name: 'memory_search'"), src.indexOf("name: 'memory_context'"));
     expect(memorySearch).toContain('handleObservationSearch');
     const memoryContext = src.slice(src.indexOf("name: 'memory_context'"), src.indexOf("name: 'smart_search'"));

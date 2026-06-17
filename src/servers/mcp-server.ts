@@ -259,24 +259,64 @@ interface ObservationAddArgs {
   metadata?: Record<string, unknown>;
 }
 
+interface WorkerMemorySaveRequest {
+  text: string;
+  title?: string;
+  project?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function buildWorkerMemorySaveRequest(args: ObservationAddArgs): WorkerMemorySaveRequest {
+  const metadata: Record<string, unknown> = { ...(args.metadata ?? {}) };
+
+  if (args.kind !== undefined && metadata.kind === undefined) {
+    metadata.kind = args.kind;
+  }
+
+  if (args.serverSessionId !== undefined && metadata.serverSessionId === undefined) {
+    metadata.serverSessionId = args.serverSessionId;
+  }
+
+  const project = args.projectId && args.projectId.trim().length > 0 ? args.projectId.trim() : undefined;
+  const title = typeof metadata.title === 'string' && metadata.title.trim().length > 0
+    ? metadata.title
+    : undefined;
+
+  return {
+    text: args.content,
+    ...(title ? { title } : {}),
+    ...(project ? { project } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
 async function handleObservationAdd(
   args: ObservationAddArgs,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
   try {
-    const ctx = requireServerBetaForObservationTool('observation_add');
     if (typeof args?.content !== 'string' || args.content.trim().length === 0) {
       throw new Error('observation_add: "content" is required');
     }
-    const projectId = args.projectId && args.projectId.trim().length > 0 ? args.projectId : ctx.projectId;
-    const request: ServerBetaAddObservationRequest = {
-      projectId,
-      content: args.content,
-      ...(args.serverSessionId !== undefined ? { serverSessionId: args.serverSessionId } : {}),
-      ...(args.kind !== undefined ? { kind: args.kind } : {}),
-      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
-    };
-    const response = await ctx.client.addObservation(request);
-    return formatJsonResult(response);
+
+    const serverBeta = resolveServerBetaToolContext();
+    if (serverBeta) {
+      if (!serverBeta.available) {
+        throw new ServerBetaClientError('missing_api_key', `observation_add: ${serverBeta.reason}`);
+      }
+
+      const projectId = args.projectId && args.projectId.trim().length > 0 ? args.projectId : serverBeta.projectId;
+      const request: ServerBetaAddObservationRequest = {
+        projectId,
+        content: args.content,
+        ...(args.serverSessionId !== undefined ? { serverSessionId: args.serverSessionId } : {}),
+        ...(args.kind !== undefined ? { kind: args.kind } : {}),
+        ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+      };
+      const response = await serverBeta.client.addObservation(request);
+      return formatJsonResult(response);
+    }
+
+    return await callWorkerAPIPost('/api/memory/save', buildWorkerMemorySaveRequest(args));
   } catch (error) {
     return formatToolError(error);
   }
@@ -523,17 +563,17 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       return await callWorkerAPIPost('/api/observations/batch', args);
     }
   },
-  // Phase 8 — observation_* tools backed by server-beta REST core.
-  // These are the canonical names. memory_* tools below are kept as
-  // compatibility aliases that delegate to these handlers, so existing
-  // MCP clients keep working without rewrites. (Plan line 753.)
+  // Phase 8 — observation_* tools. Server-beta runtime uses the REST core;
+  // worker runtime uses the worker memory endpoint where available. memory_*
+  // tools below are compatibility aliases that delegate to these handlers, so
+  // existing MCP clients keep working without rewrites. (Plan line 753.)
   {
     name: 'observation_add',
-    description: 'Insert a manual observation directly into server-beta storage. Calls /v1/memories — does NOT enqueue generation. Server-beta runtime only. Params: content (required), projectId (optional, falls back to settings), serverSessionId, kind, metadata.',
+    description: 'Insert a manual observation. Worker runtime calls /api/memory/save; server-beta runtime calls /v1/memories. Params: content (required), projectId (optional; worker maps it to project, server-beta falls back to settings), serverSessionId, kind, metadata.',
     inputSchema: {
       type: 'object',
       properties: {
-        projectId: { type: 'string', description: 'Project id (falls back to CLAUDE_MEM_SERVER_BETA_PROJECT_ID)' },
+        projectId: { type: 'string', description: 'Project id/name (worker project; server-beta falls back to CLAUDE_MEM_SERVER_BETA_PROJECT_ID)' },
         serverSessionId: { type: 'string', description: 'Optional server_session_id to attach the observation to' },
         kind: { type: 'string', description: 'Observation kind (default: manual)' },
         content: { type: 'string', description: 'Observation content (required)' },
@@ -611,10 +651,10 @@ NEVER fetch full details without filtering first. 10x token savings.`,
   // Compatibility aliases — keep `memory_*` tool names that pre-existed in
   // src/server/mcp/tools.ts working for any client that bound to them.
   // These intentionally delegate to the same observation_* handlers so
-  // there is one code path for MCP write/read against server-beta.
+  // there is one code path for MCP write/read routing.
   {
     name: 'memory_add',
-    description: 'Compatibility alias for observation_add. Same behavior; same schema modulo the legacy field names.',
+    description: 'Compatibility alias for observation_add. Worker runtime saves through /api/memory/save; server-beta runtime saves through /v1/memories. Same schema modulo the legacy field names.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -625,7 +665,10 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         title: { type: 'string', description: 'Legacy field; appended to metadata.title' },
         metadata: { type: 'object', additionalProperties: true },
       },
-      required: ['projectId'],
+      anyOf: [
+        { required: ['content'] },
+        { required: ['narrative'] },
+      ],
       additionalProperties: true,
     },
     handler: async (args: any) => {

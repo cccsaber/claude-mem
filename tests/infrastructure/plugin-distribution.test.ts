@@ -144,6 +144,8 @@ describe('Plugin Distribution - Startup Root Resolution', () => {
     expect(command).toContain('plugins/marketplaces/thedotmack/plugin');
     expect(command).toContain('plugins/cache/thedotmack/claude-mem');
     expect(command).toContain('mcp-server.cjs');
+    expect(command).not.toContain('process.cwd()');
+    expect(command).not.toContain('p.join(d,"plugin")');
     // No bare absolute "/scripts/..." path leaks through.
     expect(command).not.toContain('"/scripts/mcp-server.cjs"');
     expect(command.indexOf('plugins/cache/thedotmack/claude-mem')).toBeLessThan(
@@ -347,7 +349,6 @@ const MCP_EXPECTED = buildShellCommand({
   // trailingCommand, so none is passed (see buildMcpNodeLauncher).
   host: 'mcp', requireFile: 'mcp-server.cjs',
   notFoundMessage: 'claude-mem: mcp server not found',
-  mcpExtraCandidates: ['$PWD/plugin', '$PWD'],
   mcpExtraCacheRoots: [
     '$HOME/.codex/plugins/cache/claude-mem-local/claude-mem',
     '$HOME/.codex/plugins/cache/thedotmack/claude-mem',

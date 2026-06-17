@@ -193,7 +193,9 @@ function shTokenToNode(token: string): string {
  * solely from `requireFile`, and the Node launcher needs no shell scaffolding.
  */
 function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
-  const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
+  const rawCandidates = options.mcpExtraCandidates ?? [];
+  const candidates = rawCandidates.map(shTokenToNode);
+  const needsCwd = rawCandidates.some(candidate => candidate === '$PWD' || candidate.startsWith('$PWD/'));
   const cacheRoots = [
     ...(options.mcpExtraCacheRoots ?? []),
     '$_C/plugins/cache/thedotmack/claude-mem',
@@ -214,7 +216,7 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
     `const h=o.homedir();` +
     `const C=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude');` +
     `const E=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT||'';` +
-    `const d=process.cwd();` +
+    (needsCwd ? `const d=process.cwd();` : '') +
     `const L=x=>{try{return f.readdirSync(x).filter(n=>/^\\d/.test(n)).map(n=>p.join(x,n)).filter(z=>{try{return f.statSync(z).isDirectory()}catch{return false}}).sort((a,b)=>f.statSync(b).mtimeMs-f.statSync(a).mtimeMs)}catch{return[]}};` +
     `const K=[${kParts}].filter(Boolean);` +
     `let R=null;` +

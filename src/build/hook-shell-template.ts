@@ -4,11 +4,13 @@
  *
  * See `CLAUDE.md` → "Spawn-Contract Resolution". The host-owned config files
  * (`plugin/hooks/hooks.json`, `plugin/hooks/codex-hooks.json`,
- * `plugin/.mcp.json`) embed a defensive POSIX-shell prelude that resolves the
- * plugin root from `${CLAUDE_PLUGIN_ROOT}` (or `${PLUGIN_ROOT}`), then falls
- * back through the host cache directories and the marketplace install dir.
- * Some host versions / cache rotations do NOT inject `CLAUDE_PLUGIN_ROOT`, so
- * the fallback chain is load-bearing (issues #1215, #1533).
+ * `plugin/.mcp.json`) embed defensive launchers that resolve the plugin root
+ * from `${CLAUDE_PLUGIN_ROOT}` (or `${PLUGIN_ROOT}`), then fall back through the
+ * host cache directories and the marketplace install dir. Claude hooks use a
+ * POSIX-shell prelude; Codex/MCP use pure Node launchers so they work on
+ * Windows hosts without `sh`. Some host versions / cache rotations do NOT
+ * inject `CLAUDE_PLUGIN_ROOT`, so the fallback chain is load-bearing (issues
+ * #1215, #1533).
  *
  * This module emits those command strings from ONE place so the shape can't
  * drift between the three files. `tests/infrastructure/plugin-distribution.test.ts`
@@ -17,7 +19,7 @@
  * The fallback chain ORDER is contractual and must not change:
  *   1. ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}   (host-injected env)
  *   2. (mcp only) $PWD/plugin, $PWD               (repo/dev checkout)
- *   3. cache directories (newest first via `ls -dt`)
+ *   3. host cache directories (newest first via `ls -dt`)
  *   4. $_C/plugins/marketplaces/thedotmack/plugin (marketplace install)
  */
 
@@ -45,6 +47,11 @@ export interface ShellTemplateOptions {
   /** stderr message when no candidate root resolves. */
   notFoundMessage: string;
   /**
+   * Additional host cache roots tried before the Claude cache root. Each entry
+   * is the cache root without the /[0-9]* version suffix.
+   */
+  extraCacheRoots?: string[];
+  /**
    * MCP-only: extra candidate roots enumerated before the cache directories
    * (e.g. '$PWD/plugin', '$PWD'). Ignored for non-mcp hosts.
    */
@@ -64,11 +71,6 @@ const CLAUDE_CODE_SETUP_PATH_PRELUDE =
   'export PATH="$HOME/.nvm/versions/node/v$(ls \\"$HOME/.nvm/versions/node\\" 2>/dev/null | ' +
   "sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)/bin:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH\";";
 
-const CODEX_CLI_PATH_PRELUDE =
-  `_HP=$(printenv PATH 2>/dev/null || true); ` +
-  `if [ -z "$_HP" ] && [ -n "\${SHELL:-}" ]; then _HP=$("$SHELL" -lc 'printf %s "$PATH"' 2>/dev/null || true); fi; ` +
-  `_HP=$(printf '%s' "$_HP" | tr ' ' ':'); export PATH="\${_HP:+$_HP:}$PATH"; `;
-
 function pathPrelude(host: ShellTemplateHost): string {
   switch (host) {
     case 'claude-code':
@@ -76,9 +78,9 @@ function pathPrelude(host: ShellTemplateHost): string {
     case 'claude-code-setup':
       return CLAUDE_CODE_SETUP_PATH_PRELUDE;
     case 'codex-cli':
-      // Trailing space is intentional: join() adds one more → double space
-      // before `_C=`, matching the hand-authored codex-hooks.json.
-      return CODEX_CLI_PATH_PRELUDE;
+      // Codex hooks are emitted by buildCodexNodeLauncher() before this helper
+      // is consulted. Keep this branch empty if called by future code.
+      return '';
     case 'mcp':
       return '';
   }
@@ -118,7 +120,17 @@ function candidateBlock(options: ShellTemplateOptions): string {
     lines.push(`printf '%s\\n' ${quoted};`);
   }
 
-  const extraCacheRoots = isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : [];
+  const hostCacheRoots = options.host === 'codex-cli'
+    ? [
+        '$HOME/.codex/plugins/cache/claude-mem-local/claude-mem',
+        '$HOME/.codex/plugins/cache/thedotmack/claude-mem',
+      ]
+    : [];
+  const extraCacheRoots = [
+    ...hostCacheRoots,
+    ...(options.extraCacheRoots ?? []),
+    ...(isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : []),
+  ];
   const allGlobs = [...extraCacheRoots, '$_C/plugins/cache/thedotmack/claude-mem']
     .map((root) => `"${root}"/[0-9]*/`)
     .join(' ');
@@ -209,6 +221,82 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   );
 }
 
+function shellDoubleQuotedArg(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function jsSingleQuoted(value: string): string {
+  return `'${value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}'`;
+}
+
+function jsObjectLiteral(values: Record<string, string>): string {
+  const entries = Object.entries(values).map(([key, value]) => (
+    `${jsSingleQuoted(key)}:${jsSingleQuoted(value)}`
+  ));
+  return `{${entries.join(',')}}`;
+}
+
+function buildCodexNodeLauncher(options: ShellTemplateOptions): string {
+  if (!options.trailingCommand) {
+    throw new Error('buildCodexNodeLauncher requires trailingCommand');
+  }
+
+  const requireFile = jsSingleQuoted(options.requireFile);
+  const requireFileSecondary = options.requireFileSecondary
+    ? jsSingleQuoted(options.requireFileSecondary)
+    : null;
+  const notFound = jsSingleQuoted(`${options.notFoundMessage}\n`);
+  const extraEnv = jsObjectLiteral(options.extraEnv ?? {});
+  const trailingCommand = options.trailingCommand;
+
+  let childArgs: string;
+  if (
+    trailingCommand.length === 2 &&
+    trailingCommand[0] === 'node' &&
+    trailingCommand[1] === '"$_P/scripts/version-check.js"'
+  ) {
+    childArgs = `[p.join(R,'scripts','version-check.js')]`;
+  } else if (
+    trailingCommand.length >= 3 &&
+    trailingCommand[0] === 'node' &&
+    trailingCommand[1] === '"$_P/scripts/bun-runner.js"' &&
+    trailingCommand[2] === '"$_P/scripts/worker-service.cjs"'
+  ) {
+    childArgs = `[` +
+      `p.join(R,'scripts','bun-runner.js'),` +
+      `p.join(R,'scripts','worker-service.cjs')` +
+      trailingCommand.slice(3).map(arg => `,${jsSingleQuoted(arg)}`).join('') +
+      `]`;
+  } else {
+    throw new Error(`Unsupported codex trailingCommand: ${trailingCommand.join(' ')}`);
+  }
+
+  const secondaryCheck = requireFileSecondary
+    ? `&&f.existsSync(p.join(r,'scripts',${requireFileSecondary}))`
+    : '';
+
+  const source =
+    `const f=require('fs'),p=require('path'),o=require('os'),c=require('child_process');` +
+    `const h=o.homedir();` +
+    `const C=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude');` +
+    `const E=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT||'';` +
+    `const L=x=>{try{return f.readdirSync(x).filter(n=>/^\\d/.test(n)).map(n=>p.join(x,n)).filter(z=>{try{return f.statSync(z).isDirectory()}catch{return false}}).sort((a,b)=>f.statSync(b).mtimeMs-f.statSync(a).mtimeMs)}catch{return[]}};` +
+    `const K=[E,...L(p.join(h,'.codex/plugins/cache/claude-mem-local/claude-mem')),...L(p.join(h,'.codex/plugins/cache/thedotmack/claude-mem')),...L(p.join(C,'plugins/cache/thedotmack/claude-mem')),p.join(C,'plugins/marketplaces/thedotmack/plugin')].filter(Boolean);` +
+    `let R=null;` +
+    `for(const k of K){const r=f.existsSync(p.join(k,'plugin','scripts'))?p.join(k,'plugin'):k;if(f.existsSync(p.join(r,'scripts',${requireFile}))${secondaryCheck}){R=r;break}}` +
+    `if(!R){process.stderr.write(${notFound});process.exit(1)}` +
+    `const env=Object.assign({},process.env,${extraEnv});` +
+    `const ch=c.spawn(process.execPath,${childArgs},{stdio:'inherit',env});` +
+    `for(const s of ['SIGTERM','SIGINT','SIGHUP'])process.on(s,()=>{try{ch.kill(s)}catch{}});` +
+    `ch.on('exit',(code,sig)=>{if(sig){process.removeAllListeners(sig);try{process.kill(process.pid,sig)}catch{process.exit(1)}}else process.exit(code==null?0:code)})`;
+
+  return `node -e ${shellDoubleQuotedArg(source)}`;
+}
+
 /**
  * Build the full single-line shell command string for a Rule A site.
  * The output is byte-compatible with the hand-authored command strings in
@@ -220,13 +308,14 @@ export function buildShellCommand(options: ShellTemplateOptions): string {
   if (options.host === 'mcp') {
     return buildMcpNodeLauncher(options);
   }
+  if (options.host === 'codex-cli') {
+    return buildCodexNodeLauncher(options);
+  }
 
   const parts: string[] = [];
 
-  // The PATH prelude is pushed verbatim (including any trailing space). `parts`
-  // are later joined with a single space, so claude-code preludes (no trailing
-  // space) get one separator space, while the codex prelude (one trailing
-  // space) gets two — matching the hand-authored files exactly.
+  // The PATH prelude is pushed verbatim and then joined with a single separator
+  // before the rest of the shell command.
   const prelude = pathPrelude(options.host);
   if (prelude) parts.push(prelude);
 
@@ -235,8 +324,8 @@ export function buildShellCommand(options: ShellTemplateOptions): string {
   parts.push(candidateBlock(options));
   parts.push(`[ -n "$_P" ] || { echo "${options.notFoundMessage}" >&2; exit 1; };`);
 
-  // cygpath conversion: claude-code + codex-cli. MCP returned early above (it
-  // uses the Node launcher), so every host reaching here needs the clause.
+  // cygpath conversion for shell hosts. MCP/Codex returned early above (they
+  // use Node launchers), so every host reaching here needs the clause.
   parts.push(CYGPATH_CLAUSE);
 
   const envPrefix = options.extraEnv

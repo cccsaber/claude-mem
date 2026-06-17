@@ -629,6 +629,13 @@ async function buildHooks() {
       }
     }
     const codexHooks = JSON.parse(fs.readFileSync('plugin/hooks/codex-hooks.json', 'utf-8'));
+    const codexHookTopLevelKeys = Object.keys(codexHooks);
+    if (codexHookTopLevelKeys.length !== 1 || codexHookTopLevelKeys[0] !== 'hooks') {
+      throw new Error(
+        'plugin/hooks/codex-hooks.json must contain only the top-level "hooks" key; ' +
+        `Codex rejects unknown fields such as ${codexHookTopLevelKeys.filter((key) => key !== 'hooks').join(', ') || '(none)'}.`
+      );
+    }
     for (const eventName of Object.keys(codexHooks.hooks ?? {})) {
       if (!validCodexHookEvents.has(eventName)) {
         throw new Error(`plugin/hooks/codex-hooks.json contains unknown Codex hook event: ${eventName}`);

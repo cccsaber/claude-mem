@@ -330,7 +330,7 @@ export class OpenRouterProvider {
     siteUrl: string | undefined,
     appName: string | undefined,
     worker: WorkerRef | undefined,
-    _mode: ModeConfig
+    mode: ModeConfig
   ): Promise<void> {
     if (message.prompt_number !== undefined) {
       session.lastPromptNumber = message.prompt_number;
@@ -347,7 +347,7 @@ export class OpenRouterProvider {
       tool_output: JSON.stringify(message.tool_response),
       created_at_epoch: originalTimestamp ?? Date.now(),
       cwd: message.cwd
-    });
+    }, mode);
 
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();

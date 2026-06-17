@@ -148,6 +148,30 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
     expect(storeObservationCalls[0][1]).toBe('my-custom-project');
   });
 
+  it('threads platformSource into manual sessions when provided', () => {
+    const handler = buildHandler();
+    const { req, res } = createMockReqRes({
+      text: 'hello',
+      project: 'db',
+      platformSource: 'codex',
+    });
+    handler(req as Request, res as Response);
+
+    expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('db', 'codex');
+  });
+
+  it('accepts platformSource from metadata for MCP compatibility', () => {
+    const handler = buildHandler();
+    const { req, res } = createMockReqRes({
+      text: 'hello',
+      project: 'db',
+      metadata: { platformSource: 'codex' },
+    });
+    handler(req as Request, res as Response);
+
+    expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('db', 'codex');
+  });
+
   it('falls back to defaultProject when no project supplied anywhere', () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({ text: 'hello' });

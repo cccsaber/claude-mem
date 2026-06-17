@@ -38,6 +38,41 @@ export type ParseResult =
   | { valid: true; observations: ParsedObservation[]; summary: ParsedSummary | null }
   | { valid: false };
 
+const OBSERVATION_TYPE_ALIASES: Record<string, string> = {
+  asset_inspection: 'discovery',
+  code_inspection: 'discovery',
+  code_read: 'discovery',
+  code_search: 'discovery',
+  verification: 'discovery',
+  validation: 'discovery',
+  debugging: 'discovery',
+  git_status: 'discovery',
+  instruction_inspection: 'discovery',
+  instruction_read: 'discovery',
+  plan: 'decision',
+  plan_update: 'decision',
+  task_status: 'discovery',
+  workspace_state: 'discovery',
+  worktree_state: 'discovery',
+  task_state: 'discovery',
+  code_change: 'change',
+};
+
+function resolveObservationType(type: string, validTypes: string[]): { value: string; alias: boolean } | null {
+  const trimmed = type.trim();
+  if (validTypes.includes(trimmed)) return { value: trimmed, alias: false };
+
+  const lower = trimmed.toLowerCase();
+  if (validTypes.includes(lower)) return { value: lower, alias: false };
+
+  const aliasTarget = OBSERVATION_TYPE_ALIASES[lower];
+  if (aliasTarget && validTypes.includes(aliasTarget)) {
+    return { value: aliasTarget, alias: true };
+  }
+
+  return null;
+}
+
 export function parseAgentXml(raw: string, correlationId?: string | number): ParseResult {
   if (typeof raw !== 'string' || !raw.trim()) {
     return { valid: false };
@@ -107,8 +142,12 @@ function parseObservationBlocks(text: string, correlationId?: string | number): 
     const fallbackType = validTypes[0];
     let finalType = fallbackType;
     if (type) {
-      if (validTypes.includes(type.trim())) {
-        finalType = type.trim();
+      const resolvedType = resolveObservationType(type, validTypes);
+      if (resolvedType) {
+        finalType = resolvedType.value;
+        if (resolvedType.alias) {
+          logger.warn('PARSER', `Mapped observation type alias: ${type} -> ${finalType}`, { correlationId });
+        }
       } else {
         logger.error('PARSER', `Invalid observation type: ${type}, using "${fallbackType}"`, { correlationId });
       }

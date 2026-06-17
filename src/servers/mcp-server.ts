@@ -256,6 +256,7 @@ interface ObservationAddArgs {
   serverSessionId?: string | null;
   kind?: string;
   content: string;
+  platformSource?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -263,7 +264,27 @@ interface WorkerMemorySaveRequest {
   text: string;
   title?: string;
   project?: string;
+  platformSource?: string;
   metadata?: Record<string, unknown>;
+}
+
+function inferMcpPlatformSource(): string | undefined {
+  const explicit = process.env.CLAUDE_MEM_PLATFORM_SOURCE?.trim();
+  if (explicit) return explicit;
+
+  const candidatePaths = [
+    mcpServerDir,
+    process.argv[1],
+    process.env.CLAUDE_PLUGIN_ROOT,
+    process.env.PLUGIN_ROOT,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  const normalizedPaths = candidatePaths.map(value => value.replace(/\\/g, '/').toLowerCase());
+  if (normalizedPaths.some(value => value.includes('/.codex/plugins/cache/'))) {
+    return 'codex';
+  }
+
+  return undefined;
 }
 
 function buildWorkerMemorySaveRequest(args: ObservationAddArgs): WorkerMemorySaveRequest {
@@ -281,11 +302,15 @@ function buildWorkerMemorySaveRequest(args: ObservationAddArgs): WorkerMemorySav
   const title = typeof metadata.title === 'string' && metadata.title.trim().length > 0
     ? metadata.title
     : undefined;
+  const platformSource = typeof args.platformSource === 'string' && args.platformSource.trim().length > 0
+    ? args.platformSource.trim()
+    : inferMcpPlatformSource();
 
   return {
     text: args.content,
     ...(title ? { title } : {}),
     ...(project ? { project } : {}),
+    ...(platformSource ? { platformSource } : {}),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }
@@ -577,6 +602,7 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         serverSessionId: { type: 'string', description: 'Optional server_session_id to attach the observation to' },
         kind: { type: 'string', description: 'Observation kind (default: manual)' },
         content: { type: 'string', description: 'Observation content (required)' },
+        platformSource: { type: 'string', description: 'Platform source for worker manual memory, e.g. codex, claude, cursor' },
         metadata: { type: 'object', description: 'Free-form metadata object', additionalProperties: true },
       },
       required: ['content'],
@@ -663,6 +689,7 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         content: { type: 'string' },
         narrative: { type: 'string', description: 'Legacy alias for content; mapped to content if content is missing' },
         title: { type: 'string', description: 'Legacy field; appended to metadata.title' },
+        platformSource: { type: 'string' },
         metadata: { type: 'object', additionalProperties: true },
       },
       anyOf: [
@@ -678,6 +705,7 @@ NEVER fetch full details without filtering first. 10x token savings.`,
         projectId: args?.projectId,
         content: args?.content ?? args?.narrative ?? '',
         kind: args?.kind,
+        platformSource: args?.platformSource,
         metadata: {
           ...(args?.metadata ?? {}),
           ...(args?.title ? { title: args.title } : {}),

@@ -4,12 +4,14 @@ import { z } from 'zod';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { logger } from '../../../../utils/logger.js';
+import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 
 const saveMemorySchema = z.object({
   text: z.string().trim().min(1),
   title: z.string().optional(),
   project: z.string().optional(),
+  platformSource: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
@@ -26,7 +28,7 @@ export class MemoryRoutes extends BaseRouteHandler {
   }
 
   private handleSaveMemory = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { text, title, project, metadata } = req.body as z.infer<typeof saveMemorySchema>;
+    const { text, title, project, platformSource, metadata } = req.body as z.infer<typeof saveMemorySchema>;
     const explicitProject = typeof project === 'string' && project.trim()
       ? project.trim()
       : undefined;
@@ -34,11 +36,20 @@ export class MemoryRoutes extends BaseRouteHandler {
       ? metadata.project.trim()
       : undefined;
     const targetProject = explicitProject || metadataProject || this.defaultProject;
+    const metadataPlatformSource = typeof metadata?.platformSource === 'string' && metadata.platformSource.trim()
+      ? metadata.platformSource.trim()
+      : undefined;
+    const rawPlatformSource = typeof platformSource === 'string' && platformSource.trim()
+      ? platformSource.trim()
+      : metadataPlatformSource;
+    const targetPlatformSource = rawPlatformSource ? normalizePlatformSource(rawPlatformSource) : undefined;
 
     const sessionStore = this.dbManager.getSessionStore();
     const chromaSync = this.dbManager.getChromaSync();
 
-    const memorySessionId = sessionStore.getOrCreateManualSession(targetProject);
+    const memorySessionId = targetPlatformSource
+      ? sessionStore.getOrCreateManualSession(targetProject, targetPlatformSource)
+      : sessionStore.getOrCreateManualSession(targetProject);
 
     const observation = {
       type: 'discovery',  // Use existing valid type
@@ -63,6 +74,7 @@ export class MemoryRoutes extends BaseRouteHandler {
     logger.info('HTTP', 'Manual observation saved', {
       id: result.id,
       project: targetProject,
+      platformSource: targetPlatformSource,
       title: observation.title
     });
 

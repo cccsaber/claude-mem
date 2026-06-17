@@ -45,6 +45,7 @@ export class SessionStore {
       this.db.run('PRAGMA foreign_keys = ON');
       this.db.run('PRAGMA journal_size_limit = 4194304'); 
     }
+    this.db.run('PRAGMA foreign_keys = ON');
 
     this.initializeSchema();
 
@@ -71,6 +72,7 @@ export class SessionStore {
     this.dropDeadPendingMessagesColumns();
     this.ensurePendingMessagesToolUseIdColumn();
     this.dropWorkerPidColumn();
+    this.repairSyntheticMemorySessionOrphans();
   }
 
   private dropWorkerPidColumn(): void {
@@ -93,6 +95,71 @@ export class SessionStore {
 
     if (!applied) {
       this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(32, new Date().toISOString());
+    }
+  }
+
+  private repairSyntheticMemorySessionOrphans(): void {
+    const sessionCols = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+    const hasPlatformSource = sessionCols.some(col => col.name === 'platform_source');
+    if (!hasPlatformSource) return;
+
+    const repairObservations = this.db.prepare(`
+      UPDATE observations
+         SET memory_session_id = (
+           SELECT s.memory_session_id
+             FROM sdk_sessions s
+            WHERE s.memory_session_id IS NOT NULL
+              AND s.platform_source IS NOT NULL
+              AND observations.memory_session_id LIKE s.platform_source || '-' || s.content_session_id || '-%'
+            ORDER BY s.id DESC
+            LIMIT 1
+         )
+       WHERE NOT EXISTS (
+           SELECT 1
+             FROM sdk_sessions current_session
+            WHERE current_session.memory_session_id = observations.memory_session_id
+         )
+         AND EXISTS (
+           SELECT 1
+             FROM sdk_sessions s
+            WHERE s.memory_session_id IS NOT NULL
+              AND s.platform_source IS NOT NULL
+              AND observations.memory_session_id LIKE s.platform_source || '-' || s.content_session_id || '-%'
+         )
+    `).run();
+
+    const repairSummaries = this.db.prepare(`
+      UPDATE session_summaries
+         SET memory_session_id = (
+           SELECT s.memory_session_id
+             FROM sdk_sessions s
+            WHERE s.memory_session_id IS NOT NULL
+              AND s.platform_source IS NOT NULL
+              AND session_summaries.memory_session_id LIKE s.platform_source || '-' || s.content_session_id || '-%'
+            ORDER BY s.id DESC
+            LIMIT 1
+         )
+       WHERE NOT EXISTS (
+           SELECT 1
+             FROM sdk_sessions current_session
+            WHERE current_session.memory_session_id = session_summaries.memory_session_id
+         )
+         AND EXISTS (
+           SELECT 1
+             FROM sdk_sessions s
+            WHERE s.memory_session_id IS NOT NULL
+              AND s.platform_source IS NOT NULL
+              AND session_summaries.memory_session_id LIKE s.platform_source || '-' || s.content_session_id || '-%'
+         )
+    `).run();
+
+    const repairedObservations = Number(repairObservations.changes ?? 0);
+    const repairedSummaries = Number(repairSummaries.changes ?? 0);
+    if (repairedObservations > 0 || repairedSummaries > 0) {
+      logger.info('DB', 'Repaired orphaned synthetic memory session references', {
+        observations: repairedObservations,
+        summaries: repairedSummaries,
+      });
     }
   }
 
@@ -2497,9 +2564,15 @@ export class SessionStore {
     } | null) || null;
   }
 
-  getOrCreateManualSession(project: string): string {
-    const memorySessionId = `manual-${project}`;
-    const contentSessionId = `manual-content-${project}`;
+  getOrCreateManualSession(project: string, platformSource?: string): string {
+    const normalizedPlatformSource = platformSource
+      ? normalizePlatformSource(platformSource)
+      : DEFAULT_PLATFORM_SOURCE;
+    const sourcePrefix = normalizedPlatformSource === DEFAULT_PLATFORM_SOURCE
+      ? ''
+      : `${normalizedPlatformSource}-`;
+    const memorySessionId = `manual-${sourcePrefix}${project}`;
+    const contentSessionId = `manual-content-${sourcePrefix}${project}`;
 
     const existing = this.db.prepare(
       'SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id = ?'
@@ -2513,9 +2586,9 @@ export class SessionStore {
     this.db.prepare(`
       INSERT INTO sdk_sessions (memory_session_id, content_session_id, project, platform_source, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, ?, 'active')
-    `).run(memorySessionId, contentSessionId, project, DEFAULT_PLATFORM_SOURCE, now.toISOString(), now.getTime());
+    `).run(memorySessionId, contentSessionId, project, normalizedPlatformSource, now.toISOString(), now.getTime());
 
-    logger.info('SESSION', 'Created manual session', { memorySessionId, project });
+    logger.info('SESSION', 'Created manual session', { memorySessionId, project, platformSource: normalizedPlatformSource });
 
     return memorySessionId;
   }

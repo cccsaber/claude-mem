@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   buildCodexConversationPrompt,
   buildCodexExecArgs,
   parseCodexTomlStringSetting,
+  resolveCodexTempRoot,
   resolveCodexModel,
 } from '../../src/services/worker/CodexProvider.js';
 
@@ -54,5 +58,38 @@ CODEX_CLI_PATH = 'C:\\Users\\alice\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.ex
     expect(prompt).toContain('role="USER"');
     expect(prompt).toContain('role="ASSISTANT"');
     expect(prompt).toContain('<summary>final</summary>');
+  });
+
+  it('falls back to DATA_DIR/temp when Bun reports an invalid Windows tmpdir', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'claude-mem-codex-data-'));
+    try {
+      const resolved = resolveCodexTempRoot({
+        env: {},
+        osTmpDir: 'undefined\\temp',
+        dataDir,
+      });
+
+      expect(resolved).toBe(join(dataDir, 'temp'));
+      expect(existsSync(resolved)).toBe(true);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a valid TEMP env var when os.tmpdir is unusable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-mem-codex-temp-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'claude-mem-codex-data-'));
+    try {
+      const resolved = resolveCodexTempRoot({
+        env: { TEMP: root },
+        osTmpDir: 'undefined\\temp',
+        dataDir,
+      });
+
+      expect(resolved).toBe(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

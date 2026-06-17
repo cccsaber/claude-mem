@@ -17,6 +17,29 @@ describe('buildObservationPrompt', () => {
     expect(prompt).toContain('Concrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection');
     expect(prompt).toContain('Never reply with prose such as "Skipping", "No substantive tool executions"');
   });
+
+  it('reminds truncated multi-turn providers about current mode observation types', () => {
+    const prompt = buildObservationPrompt({
+      id: 1,
+      tool_name: 'exec_command',
+      tool_input: JSON.stringify({ cmd: 'git status --short' }),
+      tool_output: JSON.stringify({ output: '' }),
+      created_at_epoch: Date.now(),
+      cwd: '/repo',
+    }, {
+      observation_types: [
+        { id: 'bugfix', description: 'Something was broken, now fixed' },
+        { id: 'discovery', description: 'Learning about existing system' },
+        { id: 'change', description: 'Generic modification' },
+      ],
+    } as any);
+
+    expect(prompt).toContain('<type> MUST be exactly one of the current mode values');
+    expect(prompt).toContain('- bugfix: Something was broken, now fixed');
+    expect(prompt).toContain('- discovery: Learning about existing system');
+    expect(prompt).toContain('- change: Generic modification');
+    expect(prompt).toContain('verification, validation, code_search, workspace_state, task_state, plan_update, or code_change');
+  });
 });
 
 describe('buildObservationPrompt oversized field truncation (#2468)', () => {

@@ -274,7 +274,7 @@ export class GeminiProvider {
       const originalTimestamp = session.earliestPendingTimestamp;
 
       if (message.type === 'observation') {
-        await this.processObservationMessage(session, message, worker, apiKey, model, rateLimitingEnabled, originalTimestamp, lastCwd);
+        await this.processObservationMessage(session, message, worker, apiKey, model, rateLimitingEnabled, mode, originalTimestamp, lastCwd);
       } else if (message.type === 'summarize') {
         await this.processSummaryMessage(session, message, worker, apiKey, model, rateLimitingEnabled, mode, originalTimestamp, lastCwd);
       }
@@ -288,6 +288,7 @@ export class GeminiProvider {
     apiKey: string,
     model: GeminiModel,
     rateLimitingEnabled: boolean,
+    mode: ModeConfig,
     originalTimestamp: number | null,
     lastCwd: string | undefined
   ): Promise<void> {
@@ -306,7 +307,7 @@ export class GeminiProvider {
       tool_output: JSON.stringify(message.tool_response),
       created_at_epoch: originalTimestamp ?? Date.now(),
       cwd: message.cwd
-    });
+    }, mode);
 
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();

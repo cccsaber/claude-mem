@@ -114,7 +114,26 @@ function truncateObservationField(value: unknown, maxChars: number = OBS_PROMPT_
   return `${head}\n... <elided chars="${elidedChars}" original_size_chars="${raw.length}" reason="oversize" /> ...\n${tail}`;
 }
 
-export function buildObservationPrompt(obs: Observation): string {
+function buildObservationTypeReminder(mode?: ModeConfig): string {
+  if (!mode) return '';
+
+  const typeChoices = mode.observation_types
+    .map(type => {
+      const description = typeof type.description === 'string' && type.description.trim()
+        ? `: ${type.description.trim()}`
+        : '';
+      return `- ${type.id}${description}`;
+    })
+    .join('\n');
+
+  return `
+Observation type constraints:
+- <type> MUST be exactly one of the current mode values below.
+- Do not invent status-style type names such as verification, validation, code_search, workspace_state, task_state, plan_update, or code_change. Choose the closest valid type instead.
+${typeChoices}`;
+}
+
+export function buildObservationPrompt(obs: Observation, mode?: ModeConfig): string {
   let toolInput: any;
   let toolOutput: any;
 
@@ -144,6 +163,7 @@ export function buildObservationPrompt(obs: Observation): string {
 </observed_from_primary_session>
 
 If a <parameters> or <outcome> block above contains an "<elided chars=... />" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.
+${buildObservationTypeReminder(mode)}
 
 Return either one or more <observation>...</observation> blocks, or an empty response if this tool use should be skipped.
 Concrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.

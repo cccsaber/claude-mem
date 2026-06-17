@@ -14,7 +14,7 @@ function expectObservation(raw: string) {
 beforeEach(() => {
   const modeManager = ModeManager.getInstance() as unknown as { activeMode: unknown };
   modeManager.activeMode = {
-    observation_types: [{ id: 'bugfix' }, { id: 'discovery' }, { id: 'refactor' }],
+    observation_types: [{ id: 'bugfix' }, { id: 'discovery' }, { id: 'refactor' }, { id: 'change' }, { id: 'decision' }],
     observation_concepts: [],
   };
 });
@@ -134,6 +134,35 @@ describe('parseAgentXml — observations', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe('bugfix');
+  });
+
+  it('maps Codex status-style type aliases to valid mode types', () => {
+    const aliases = [
+      ['asset_inspection', 'discovery'],
+      ['code_inspection', 'discovery'],
+      ['code_read', 'discovery'],
+      ['code_search', 'discovery'],
+      ['debugging', 'discovery'],
+      ['git_status', 'discovery'],
+      ['instruction_inspection', 'discovery'],
+      ['instruction_read', 'discovery'],
+      ['plan', 'decision'],
+      ['plan_update', 'decision'],
+      ['task_state', 'discovery'],
+      ['task_status', 'discovery'],
+      ['validation', 'discovery'],
+      ['verification', 'discovery'],
+      ['workspace_state', 'discovery'],
+      ['worktree_state', 'discovery'],
+      ['code_change', 'change'],
+    ] as const;
+    const xml = aliases
+      .map(([alias]) => `<observation><type>${alias}</type><title>${alias}</title></observation>`)
+      .join('\n');
+
+    const result = expectObservation(xml);
+
+    expect(result.map(obs => obs.type)).toEqual(aliases.map(([, target]) => target));
   });
 
   it('returns a fail-fast result when no observation/summary blocks are present', () => {

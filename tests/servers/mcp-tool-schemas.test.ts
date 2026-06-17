@@ -49,6 +49,7 @@ describe('MCP tool inputSchema declarations', () => {
       src.indexOf("name: 'observation_record_event'"),
     );
     expect(section).toContain('content:');
+    expect(section).toContain('platformSource:');
     expect(section).toContain("required: ['content']");
     expect(section).toContain('handleObservationAdd');
     expect(section).toContain('/api/memory/save');
@@ -59,12 +60,14 @@ describe('MCP tool inputSchema declarations', () => {
   it('observation_add routes worker runtime writes to the worker memory endpoint', async () => {
     const src = await Bun.file(mcpServerPath).text();
     const section = src.slice(
-      src.indexOf('async function handleObservationAdd'),
+      src.indexOf('function inferMcpPlatformSource'),
       src.indexOf('interface ObservationRecordEventArgs'),
     );
     expect(section).toContain('resolveServerBetaToolContext');
     expect(section).toContain("callWorkerAPIPost('/api/memory/save'");
     expect(section).toContain('buildWorkerMemorySaveRequest');
+    expect(section).toContain('inferMcpPlatformSource');
+    expect(section).toContain('/.codex/plugins/cache/');
     expect(section).not.toContain("requireServerBetaForObservationTool('observation_add')");
   });
 
@@ -115,6 +118,7 @@ describe('MCP tool inputSchema declarations', () => {
     // observation_* tools, otherwise we have two write paths in MCP.
     const memoryAdd = src.slice(src.indexOf("name: 'memory_add'"), src.indexOf("name: 'memory_search'"));
     expect(memoryAdd).toContain('handleObservationAdd');
+    expect(memoryAdd).toContain('platformSource:');
     expect(memoryAdd).toContain('/api/memory/save');
     expect(memoryAdd).toContain('anyOf:');
     expect(memoryAdd).not.toContain("required: ['projectId']");

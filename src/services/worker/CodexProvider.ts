@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { homedir, tmpdir } from 'os';
 import { execFileSync } from 'child_process';
 import { spawnHidden } from '../../shared/spawn.js';
@@ -29,6 +29,56 @@ interface CodexConfig {
   model: string;
   cwd: string;
   timeoutMs: number;
+}
+
+function isUsableTempRootCandidate(candidate: string | undefined): candidate is string {
+  if (!candidate) return false;
+  const trimmed = candidate.trim();
+  if (!trimmed) return false;
+  if (/^(undefined|null)(?:[\\/]|$)/i.test(trimmed)) return false;
+  return isAbsolute(trimmed);
+}
+
+function safeOsTmpDir(): string | undefined {
+  try {
+    return tmpdir();
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveCodexTempRoot(input?: {
+  env?: NodeJS.ProcessEnv;
+  osTmpDir?: string;
+  dataDir?: string;
+}): string {
+  const env = input?.env ?? process.env;
+  const dataDir = input?.dataDir ?? DATA_DIR;
+  const fallback = join(dataDir, 'temp');
+  const candidates = [
+    input?.osTmpDir ?? safeOsTmpDir(),
+    env.TMPDIR,
+    env.TEMP,
+    env.TMP,
+    env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Temp') : undefined,
+    env.USERPROFILE ? join(env.USERPROFILE, 'AppData', 'Local', 'Temp') : undefined,
+    fallback,
+  ];
+
+  for (const candidate of candidates) {
+    if (!isUsableTempRootCandidate(candidate)) continue;
+    const tempRoot = candidate.trim();
+    try {
+      ensureDir(tempRoot);
+      return tempRoot;
+    } catch {
+      // Try the next candidate; the final fallback below will surface any real
+      // filesystem error if no candidate is usable.
+    }
+  }
+
+  ensureDir(fallback);
+  return fallback;
 }
 
 function codexHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -271,7 +321,7 @@ export class CodexProvider {
         const originalTimestamp = session.earliestPendingTimestamp;
 
         if (message.type === 'observation') {
-          await this.processObservationMessage(session, message, worker, config, originalTimestamp, lastCwd);
+          await this.processObservationMessage(session, message, worker, config, mode, originalTimestamp, lastCwd);
         } else if (message.type === 'summarize') {
           await this.processSummaryMessage(session, message, worker, config, mode, originalTimestamp, lastCwd);
         }
@@ -294,6 +344,7 @@ export class CodexProvider {
     message: { prompt_number?: number; tool_name?: string; tool_input?: unknown; tool_response?: unknown; cwd?: string },
     worker: WorkerRef | undefined,
     config: CodexConfig,
+    mode: ModeConfig,
     originalTimestamp: number | null,
     lastCwd: string | undefined
   ): Promise<void> {
@@ -312,7 +363,7 @@ export class CodexProvider {
       tool_output: JSON.stringify(message.tool_response),
       created_at_epoch: originalTimestamp ?? Date.now(),
       cwd: message.cwd,
-    });
+    }, mode);
 
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();
@@ -426,7 +477,8 @@ export class CodexProvider {
   ): Promise<CodexQueryResult> {
     const truncatedHistory = this.truncateHistory(history);
     const prompt = buildCodexConversationPrompt(truncatedHistory);
-    const tempDir = mkdtempSync(join(tmpdir(), 'claude-mem-codex-'));
+    const tempRoot = resolveCodexTempRoot();
+    const tempDir = mkdtempSync(join(tempRoot, 'claude-mem-codex-'));
     const outputLastMessagePath = join(tempDir, 'last-message.txt');
     const args = buildCodexExecArgs({
       model: config.model,
@@ -443,7 +495,7 @@ export class CodexProvider {
     });
 
     try {
-      const { stdout, stderr } = await this.runCodexExec(config.cliPath, args, prompt, config.timeoutMs, signal);
+      const { stdout, stderr } = await this.runCodexExec(config.cliPath, args, prompt, config.timeoutMs, signal, tempRoot);
       let content = '';
       try {
         content = existsSync(outputLastMessagePath) ? readFileSync(outputLastMessagePath, 'utf-8') : '';
@@ -468,12 +520,16 @@ export class CodexProvider {
     args: string[],
     prompt: string,
     timeoutMs: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    tempRoot: string
   ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const env = {
         ...process.env,
         CODEX_HOME: codexHome(),
+        TMP: tempRoot,
+        TEMP: tempRoot,
+        TMPDIR: tempRoot,
       };
       const child = spawnHidden(cliPath, args, {
         cwd: DATA_DIR,

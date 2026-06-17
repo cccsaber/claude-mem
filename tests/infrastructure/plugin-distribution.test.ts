@@ -150,16 +150,24 @@ describe('Plugin Distribution - Startup Root Resolution', () => {
   });
 
   it('Codex hook commands should have config-dir based non-empty fallbacks', () => {
+    const parsed = readJson('plugin/hooks/codex-hooks.json');
+    expect(Object.keys(parsed)).toEqual(['hooks']);
+
     for (const command of commandHooksFrom('plugin/hooks/codex-hooks.json')) {
-      expect(command).toContain('${CLAUDE_CONFIG_DIR:-$HOME/.claude}');
-      expect(command).toContain('export PATH=');
-      expect(command).toContain('while IFS= read -r _R');
-      expect(command).toContain('$_C/plugins/marketplaces/thedotmack/plugin');
-      expect(command).toContain('$_C/plugins/cache/thedotmack/claude-mem');
-      expect(command).toContain('[ -f "$_Q/scripts/');
-      expect(command).toContain('command -v cygpath');
-      expect(command.indexOf('$_C/plugins/cache/thedotmack/claude-mem')).toBeLessThan(
-        command.indexOf('$_C/plugins/marketplaces/thedotmack/plugin')
+      expect(command.slice(0, 8)).toBe('node -e ');
+      expect(command).toContain('process.env.CLAUDE_CONFIG_DIR');
+      expect(command).toContain("p.join(h,'.claude')");
+      expect(command).toContain('process.env.CLAUDE_PLUGIN_ROOT');
+      expect(command).toContain('process.env.PLUGIN_ROOT');
+      expect(command).toContain(".codex/plugins/cache/claude-mem-local/claude-mem");
+      expect(command).toContain(".codex/plugins/cache/thedotmack/claude-mem");
+      expect(command).toContain("plugins/cache/thedotmack/claude-mem");
+      expect(command).toContain("plugins/marketplaces/thedotmack/plugin");
+      expect(command).not.toContain('export PATH=');
+      expect(command).not.toContain('while IFS= read -r _R');
+      expect(command).not.toContain('command -v cygpath');
+      expect(command.indexOf(".codex/plugins/cache/claude-mem-local/claude-mem")).toBeLessThan(
+        command.indexOf("plugins/marketplaces/thedotmack/plugin")
       );
     }
   });
@@ -312,10 +320,18 @@ describe('Spawn-Contract Templating - Rule A generator parity', () => {
     // The placeholder may appear only inside the _E="${CLAUDE_PLUGIN_ROOT:-...}"
     // expansion, never as a bare `${CLAUDE_PLUGIN_ROOT}` token that would reach
     // the binary unsubstituted.
-    const shCommands = Object.values(RULE_A_EXPECTATIONS).flatMap((c) => Object.values(c));
+    const shCommands = Object.entries(RULE_A_EXPECTATIONS)
+      .filter(([filePath]) => filePath !== 'plugin/hooks/codex-hooks.json')
+      .flatMap(([, c]) => Object.values(c));
     for (const command of shCommands) {
       expect(command).not.toMatch(/\$\{CLAUDE_PLUGIN_ROOT\}(?!:-)/);
       expect(command).toContain('_E="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}"');
+    }
+    const codexCommands = Object.values(RULE_A_EXPECTATIONS['plugin/hooks/codex-hooks.json']);
+    for (const command of codexCommands) {
+      expect(command).not.toContain('${CLAUDE_PLUGIN_ROOT}');
+      expect(command).toContain('process.env.CLAUDE_PLUGIN_ROOT');
+      expect(command).toContain('process.env.PLUGIN_ROOT');
     }
     // The MCP node launcher reads env vars directly — it has no `${...}` shell
     // tokens at all, so a raw placeholder can never reach the binary.
@@ -347,6 +363,24 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
     return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
   }
 
+  let bashNativePathSupport: boolean | null = null;
+  function bashCanAccessNativePaths(): boolean {
+    if (bashNativePathSupport !== null) return bashNativePathSupport;
+    const root = mkdtempSync(path.join(tmpdir(), 'cm-bash-native-'));
+    const probe = path.join(root, 'probe.txt');
+    writeFileSync(probe, '');
+    try {
+      const result = spawnSync('bash', ['-c', '[ -f "$PROBE" ]'], {
+        env: { PATH: process.env.PATH ?? '', PROBE: probe },
+        encoding: 'utf-8',
+      });
+      bashNativePathSupport = result.status === 0;
+      return bashNativePathSupport;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
   const claudeCommands = () => {
     const parsed = readJson('plugin/hooks/hooks.json');
     return Object.entries(RULE_A_EXPECTATIONS['plugin/hooks/hooks.json']).map(
@@ -355,6 +389,8 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
   };
 
   it('resolves _P from CLAUDE_PLUGIN_ROOT when the env var points at a valid root', () => {
+    if (!bashCanAccessNativePaths()) return;
+
     const root = mkdtempSync(path.join(tmpdir(), 'cm-root-'));
     mkdirSync(path.join(root, 'scripts'), { recursive: true });
     writeFileSync(path.join(root, 'scripts', 'version-check.js'), '');
@@ -371,9 +407,11 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   it('resolves _P from the cache directory when CLAUDE_PLUGIN_ROOT is unset', () => {
+    if (!bashCanAccessNativePaths()) return;
+
     const home = mkdtempSync(path.join(tmpdir(), 'cm-home-'));
     const cacheRoot = path.join(home, '.claude', 'plugins', 'cache', 'thedotmack', 'claude-mem', '99.0.0');
     mkdirSync(path.join(cacheRoot, 'scripts'), { recursive: true });
@@ -389,7 +427,7 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   it('fails cleanly with the canonical not-found message when no candidate exists', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'cm-empty-'));
@@ -402,6 +440,47 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
       });
       expect(result.status).not.toBe(0);
       expect(result.stderr ?? '').toMatch(/claude-mem: .* not found/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('Codex node launcher resolves numeric cache versions without a shell prelude', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'cm-codex-home-'));
+    const cacheRoot = path.join(home, '.codex', 'plugins', 'cache', 'claude-mem-local', 'claude-mem', '13.6.1');
+    const scriptsDir = path.join(cacheRoot, 'scripts');
+    const marker = path.join(home, 'codex-launcher-marker.json');
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(path.join(scriptsDir, 'worker-service.cjs'), '');
+    writeFileSync(
+      path.join(scriptsDir, 'bun-runner.js'),
+      "const fs=require('fs');fs.writeFileSync(process.env.CM_MARKER,JSON.stringify({args:process.argv.slice(2)}));"
+    );
+
+    try {
+      const parsed = readJson('plugin/hooks/codex-hooks.json');
+      const command = hookCommandByPath(parsed, 'UserPromptSubmit.0.0')!;
+      const result = spawnSync(command, {
+        shell: true,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+          CM_MARKER: marker,
+          CLAUDE_PLUGIN_ROOT: '',
+          PLUGIN_ROOT: '',
+        },
+        encoding: 'utf-8',
+      });
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(readFileSync(marker, 'utf-8'));
+      expect(payload.args).toEqual([
+        path.join(cacheRoot, 'scripts', 'worker-service.cjs'),
+        'hook',
+        'codex',
+        'session-init',
+      ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

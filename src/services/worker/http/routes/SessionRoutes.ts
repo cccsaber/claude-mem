@@ -18,7 +18,6 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { getProjectContext } from '../../../../utils/project-name.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
-import { readZcodeApiKey, DEFAULT_BIGMODEL_ANTHROPIC_URL } from '../../../../shared/zcode-credentials.js';
 import { handleGeneratorExit } from '../../session/GeneratorExitHandler.js';
 import { captureEvent } from '../../../telemetry/telemetry.js';
 import { SessionCompletionHandler } from '../../session/SessionCompletionHandler.js';
@@ -94,10 +93,6 @@ export class SessionRoutes extends BaseRouteHandler {
     const selectedProvider = this.getSelectedProvider();
 
     if (!session.generatorPromise) {
-      // Platform routing runs BEFORE tier routing: a platform that owns its
-      // endpoint+model (e.g. zcode → bigmodel) must not have its modelOverride
-      // clobbered by tier routing. applyTierRouting self-guards against this.
-      await this.applyPlatformRouting(session);
       await this.applyTierRouting(session);
       await this.startGeneratorWithProvider(session, selectedProvider, source);
       return;
@@ -541,60 +536,7 @@ export class SessionRoutes extends BaseRouteHandler {
     'Read', 'Glob', 'Grep', 'LS', 'ListMcpResourcesTool'
   ]);
 
-  /**
-   * Per-platform model/endpoint routing. When a platform (e.g. zcode → bigmodel
-   * Anthropic-compatible gateway) is fully configured (all three of
-   * CLAUDE_MEM_ZCODE_MODEL/API_KEY/BASE_URL non-empty) AND the session's
-   * platformSource matches, set modelOverride + endpointOverride so
-   * ClaudeProvider injects the platform's key+base URL and clears the OAuth
-   * token (subscription token must never be sent to a third-party gateway).
-   *
-   * Runs before applyTierRouting; applyTierRouting self-guards against
-   * endpointOverride so it won't clobber the platform model. When the platform
-   * fields are unset, behavior is unchanged (global model + OAuth).
-   */
-  private async applyPlatformRouting(session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>): Promise<void> {
-    session.endpointOverride = undefined;
-
-    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const zcodeModel = settings.CLAUDE_MEM_ZCODE_MODEL?.trim();
-    let zcodeKey = settings.CLAUDE_MEM_ZCODE_API_KEY?.trim();
-    // Base URL defaults to bigmodel's Anthropic-compatible gateway, so a ZCode
-    // user needs only model + key configured. Explicit empty string still wins
-    // (loadFromFile returns the file value verbatim).
-    const zcodeUrl = settings.CLAUDE_MEM_ZCODE_BASE_URL?.trim() || DEFAULT_BIGMODEL_ANTHROPIC_URL;
-
-    // Fallback credential source: when the user has not set
-    // CLAUDE_MEM_ZCODE_API_KEY in settings, source it from the ZCode desktop
-    // client's stored provider key. Mirrors how ClaudeProvider sources OAuth
-    // tokens from the OS keychain — zero-config reuse of the host's login.
-    if (session.platformSource === 'zcode' && zcodeModel && !zcodeKey) {
-      const credential = readZcodeApiKey();
-      if (credential.kind === 'present') {
-        zcodeKey = credential.apiKey;
-        logger.debug('ZCODE', 'ZCode platform routing using key sourced from ZCode client credentials', {
-          sessionId: session.sessionDbId,
-        });
-      }
-    }
-
-    if (session.platformSource === 'zcode' && zcodeModel && zcodeKey && zcodeUrl) {
-      session.modelOverride = zcodeModel;
-      session.endpointOverride = { apiKey: zcodeKey, baseUrl: zcodeUrl };
-      logger.debug('SESSION', `Platform routing: zcode → model=${zcodeModel}, baseUrl=${zcodeUrl}`, {
-        sessionId: session.sessionDbId,
-        platformSource: session.platformSource,
-      });
-    }
-  }
-
   private async applyTierRouting(session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>): Promise<void> {
-    // Platform routing takes precedence: when a platform owns its endpoint+model
-    // (endpointOverride set by applyPlatformRouting), tier routing must not
-    // overwrite modelOverride. See applyPlatformRouting below.
-    if (session.endpointOverride) {
-      return;
-    }
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     if (settings.CLAUDE_MEM_TIER_ROUTING_ENABLED === 'false') {
       session.modelOverride = undefined;

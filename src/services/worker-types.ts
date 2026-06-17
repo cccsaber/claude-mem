@@ -36,14 +36,6 @@ export interface ActiveSession {
   idleTimedOut?: boolean;  
   lastGeneratorActivity: number;
   modelOverride?: string;
-  /**
-   * Per-session Anthropic-compatible endpoint override (per-platform routing).
-   * When set, ClaudeProvider injects apiKey + baseUrl into the isolated SDK
-   * env and clears the OAuth token (so a subscription token is never sent to a
-   * third-party gateway). Set by SessionRoutes.applyPlatformRouting when
-   * platformSource matches a configured platform (e.g. zcode → bigmodel).
-   */
-  endpointOverride?: { apiKey: string; baseUrl: string };
   lastSummaryStored?: boolean;
   pendingAgentId?: string | null;
   pendingAgentType?: string | null;

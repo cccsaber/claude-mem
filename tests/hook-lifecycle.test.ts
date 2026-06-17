@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { fileURLToPath } from 'url';
 
 describe('Hook Lifecycle - Event Handlers', () => {
   describe('worker fallback failure counter', () => {
@@ -250,145 +249,6 @@ describe('Codex CLI Compatibility (#744)', () => {
   });
 });
 
-describe('ZCode Compatibility (GLM ADE, Claude-Code-derived kernel)', () => {
-  describe('getPlatformAdapter', () => {
-    it('should return zcodeAdapter for zcode', async () => {
-      const { getPlatformAdapter, zcodeAdapter } = await import('../src/cli/adapters/index.js');
-      const adapter = getPlatformAdapter('zcode');
-      expect(adapter).toBe(zcodeAdapter);
-    });
-  });
-
-  describe('zcodeAdapter normalizeInput (camelCase payload)', () => {
-    it('maps camelCase sessionId / toolName / toolInput', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({
-        sessionId: 'zcode-sess-1',
-        cwd: '/tmp',
-        toolName: 'Bash',
-        toolInput: { command: 'ls' },
-        turnId: 'turn-42',
-      });
-      expect(input.sessionId).toBe('zcode-sess-1');
-      expect(input.toolName).toBe('Bash');
-      expect(input.toolInput).toEqual({ command: 'ls' });
-      expect(input.turnId).toBe('turn-42');
-    });
-
-    it('maps toolResultPreview → toolResponse (ZCode-specific field)', async () => {
-      // ZCode's PostToolUse hands us `toolResultPreview` (a truncated preview),
-      // not a full `tool_response`. The adapter must surface it as toolResponse
-      // so the observation handler records something.
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({
-        sessionId: 'zcode-sess-1',
-        cwd: '/tmp',
-        toolName: 'Read',
-        toolInput: { file_path: '/a.txt' },
-        toolResultPreview: '<first 500 chars>',
-      });
-      expect(input.toolResponse).toBe('<first 500 chars>');
-    });
-
-    it('preserves ZCode diagnostic fields (toolCallId/mode/traceId) in metadata', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({
-        sessionId: 'zcode-sess-1',
-        cwd: '/tmp',
-        toolCallId: 'call_abc',
-        mode: 'default',
-        traceId: 'trace_xyz',
-        timestamp: 1700000000000,
-      });
-      expect(input.metadata).toEqual({
-        toolCallId: 'call_abc',
-        mode: 'default',
-        traceId: 'trace_xyz',
-        timestamp: 1700000000000,
-      });
-    });
-
-    it('omits metadata when no diagnostic fields are present', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({
-        sessionId: 'zcode-sess-1',
-        cwd: '/tmp',
-        toolName: 'Bash',
-      });
-      expect(input.metadata).toBeUndefined();
-    });
-
-    it('does not set transcriptPath (ZCode emits no transcript_path)', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({
-        sessionId: 'zcode-sess-1',
-        cwd: '/tmp',
-      });
-      expect(input.transcriptPath).toBeUndefined();
-    });
-
-    it('rejects payloads without a sessionId', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const { AdapterRejectedInput } = await import('../src/cli/adapters/errors.js');
-      expect(() => zcodeAdapter.normalizeInput({ cwd: '/tmp' })).toThrow(AdapterRejectedInput);
-    });
-
-    it('rejects empty-string sessionId', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const { AdapterRejectedInput } = await import('../src/cli/adapters/errors.js');
-      expect(() => zcodeAdapter.normalizeInput({ sessionId: '', cwd: '/tmp' })).toThrow(AdapterRejectedInput);
-    });
-
-    it('falls back to process.cwd() when cwd is absent', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const input = zcodeAdapter.normalizeInput({ sessionId: 'zcode-sess-1' });
-      expect(input.cwd).toBe(process.cwd());
-    });
-  });
-
-  describe('zcodeAdapter formatOutput (Claude-Code-derived hookSpecificOutput)', () => {
-    it('delivers additionalContext for SessionStart/PostToolUse context injection', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const out = zcodeAdapter.formatOutput({
-        hookSpecificOutput: {
-          hookEventName: 'SessionStart',
-          additionalContext: 'remembered facts',
-        },
-      }) as Record<string, unknown>;
-      expect(out.hookSpecificOutput).toEqual({
-        hookEventName: 'SessionStart',
-        additionalContext: 'remembered facts',
-      });
-    });
-
-    it('emits permissionDecision deny for PreToolUse gating', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const out = zcodeAdapter.formatOutput({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          additionalContext: '',
-          permissionDecision: 'deny',
-          permissionDecisionReason: 'blocked',
-        },
-      }) as Record<string, unknown>;
-      const specific = out.hookSpecificOutput as Record<string, unknown>;
-      expect(specific.permissionDecision).toBe('deny');
-      expect(specific.permissionDecisionReason).toBe('blocked');
-    });
-
-    it('omits hookSpecificOutput for Stop (no injection on Stop)', async () => {
-      const { zcodeAdapter } = await import('../src/cli/adapters/zcode.js');
-      const out = zcodeAdapter.formatOutput({
-        hookSpecificOutput: {
-          hookEventName: 'Stop',
-          additionalContext: 'should be dropped',
-        },
-      }) as Record<string, unknown>;
-      expect(out.hookSpecificOutput).toBeUndefined();
-    });
-  });
-});
-
 describe('Cursor IDE Compatibility (#838, #1049)', () => {
   describe('cursorAdapter session ID fallbacks', () => {
     it('should use conversation_id when present', async () => {
@@ -620,7 +480,7 @@ describe('hookCommand - stderr discipline (plan 01 / #2292)', () => {
     expect(typeof hookCommand).toBe('function');
 
     const hookCommandSource = await Bun.file(
-      fileURLToPath(new URL('../src/cli/hook-command.ts', import.meta.url))
+      new URL('../src/cli/hook-command.ts', import.meta.url).pathname
     ).text();
 
     // Diagnostics still go through the structured logger.

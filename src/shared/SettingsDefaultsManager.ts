@@ -25,9 +25,6 @@ export interface SettingsDefaults {
   CLAUDE_MEM_OPENROUTER_APP_NAME: string;
   CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES: string;
   CLAUDE_MEM_OPENROUTER_MAX_TOKENS: string;
-  CLAUDE_MEM_ZCODE_MODEL: string;       // Per-platform routing: model for ZCode (glm) platform requests
-  CLAUDE_MEM_ZCODE_API_KEY: string;     // Per-platform routing: API key for the ZCode endpoint
-  CLAUDE_MEM_ZCODE_BASE_URL: string;    // Per-platform routing: Anthropic-compatible base URL (e.g. bigmodel)
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
   CLAUDE_MEM_PYTHON_VERSION: string;
@@ -109,9 +106,6 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES: '20',  // Max messages in context window
     CLAUDE_MEM_OPENROUTER_MAX_TOKENS: '100000',  // Max estimated tokens (~100k safety limit)
-    CLAUDE_MEM_ZCODE_MODEL: '',  // Per-platform routing: model for ZCode requests (empty = use global model)
-    CLAUDE_MEM_ZCODE_API_KEY: '',  // Per-platform routing: API key for ZCode endpoint (empty = no routing)
-    CLAUDE_MEM_ZCODE_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',  // Per-platform routing: Anthropic-compatible base URL for ZCode. Defaults to bigmodel's gateway so ZCode users need only set model + (optionally) source the key from the ZCode client.
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',
     CLAUDE_MEM_PYTHON_VERSION: '3.13',

@@ -7,21 +7,40 @@ interface ResolveContext {
   session?: Record<string, unknown>;
 }
 
-function parsePath(path: string): Array<string | number> {
+function parsePath(path: string): Array<string | number | { filterKey: string; filterValue: string; excludePrefix?: string }> {
   const cleaned = path.trim().replace(/^\$\.?/, '');
   if (!cleaned) return [];
 
-  const tokens: Array<string | number> = [];
+  const tokens: Array<string | number | { filterKey: string; filterValue: string; excludePrefix?: string }> = [];
   const parts = cleaned.split('.');
 
   for (const part of parts) {
-    const regex = /([^[\]]+)|\[(\d+)\]/g;
+    // Filter syntax: [key=value] or [key=value,-prefix]
+    //   [role=user]            â†?element[role]==="user"
+    //   [role=user,-<]         â†?element[role]==="user" AND content doesn't start with "<"
+    // The optional ,-prefix excludes elements whose resolved content starts with
+    // that character (e.g. skip system-reminder injections that masquerade as
+    // user messages).
+    const filterMatch = part.match(/\[([^=\]]+)=([^\],]+)(?:,(-([^\]]+)))?\]/);
+    if (filterMatch) {
+      const propMatch = part.match(/^([^[\]]+)/);
+      if (propMatch) tokens.push(propMatch[1]);
+      tokens.push({
+        filterKey: filterMatch[1],
+        filterValue: filterMatch[2],
+        ...(filterMatch[4] ? { excludePrefix: filterMatch[4] } : {}),
+      });
+      continue;
+    }
+    const regex = /([^[\]]+)|\[(\d+)\]|\[\]/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(part)) !== null) {
       if (match[1]) {
         tokens.push(match[1]);
       } else if (match[2]) {
         tokens.push(parseInt(match[2], 10));
+      } else if (match[0] === '[]') {
+        tokens.push('*');
       }
     }
   }
@@ -34,11 +53,74 @@ export function getValueByPath(input: unknown, path: string): unknown {
   const tokens = parsePath(path);
   let current: any = input;
 
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
     if (current === null || current === undefined) return undefined;
+    const token = tokens[i];
+    if (token === '*') {
+      const remaining = tokens.slice(i + 1);
+      return findFirstNonEmptyInArray(current, remaining);
+    }
+    if (typeof token === 'object' && token !== null && 'filterKey' in token) {
+      const remaining = tokens.slice(i + 1);
+      return findFirstFilteredInArray(current, token.filterKey, token.filterValue, remaining, token.excludePrefix);
+    }
     current = current[token as any];
   }
 
+  return current;
+}
+
+/**
+ * Find the LAST array element where element[filterKey]===filterValue, then
+ * resolve remaining tokens from it. Used for extracting the user's latest
+ * prompt from message history (the first role=user entry is often a
+ * system-reminder; the real prompt is the last one).
+ */
+function findFirstFilteredInArray(
+  arr: unknown,
+  filterKey: string,
+  filterValue: string,
+  remainingTokens: Array<string | number | { filterKey: string; filterValue: string; excludePrefix?: string }>,
+  excludePrefix?: string,
+): unknown {
+  if (!Array.isArray(arr)) return undefined;
+  let lastMatch: unknown = undefined;
+  for (const item of arr) {
+    if (item && typeof item === 'object' && (item as any)[filterKey] === filterValue) {
+      const value = resolveTokens(item, remainingTokens);
+      if (value !== undefined && value !== null && value !== '') {
+        if (excludePrefix && typeof value === 'string' && value.startsWith(excludePrefix)) continue;
+        lastMatch = value;
+      }
+    }
+  }
+  return lastMatch;
+}
+
+function findFirstNonEmptyInArray(arr: unknown, remainingTokens: Array<string | number | { filterKey: string; filterValue: string; excludePrefix?: string }>): unknown {
+  if (!Array.isArray(arr)) return undefined;
+  for (const item of arr) {
+    const value = resolveTokens(item, remainingTokens);
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function resolveTokens(input: unknown, tokens: Array<string | number | { filterKey: string; filterValue: string; excludePrefix?: string }>): unknown {
+  let current: any = input;
+  for (let i = 0; i < tokens.length; i++) {
+    if (current === null || current === undefined) return undefined;
+    const token = tokens[i];
+    if (token === '*') {
+      const remaining = tokens.slice(i + 1);
+      return findFirstNonEmptyInArray(current, remaining);
+    }
+    if (typeof token === 'object' && token !== null && 'filterKey' in token) {
+      const remaining = tokens.slice(i + 1);
+      return findFirstFilteredInArray(current, token.filterKey, token.filterValue, remaining, token.excludePrefix);
+    }
+    current = current[token as any];
+  }
   return current;
 }
 
@@ -77,25 +159,80 @@ export function resolveFieldSpec(
     return getValueByPath(entry, spec);
   }
 
+  let resolved: unknown;
+
   if (spec.coalesce && Array.isArray(spec.coalesce)) {
     for (const candidate of spec.coalesce) {
       const value = resolveFieldSpec(candidate, entry, ctx);
-      if (!isEmptyValue(value)) return value;
+      if (!isEmptyValue(value)) {
+        resolved = value;
+        break;
+      }
     }
   }
 
-  if (spec.path) {
+  if (resolved === undefined && spec.path) {
     const fromContext = resolveFromContext(spec.path, ctx);
-    if (fromContext !== undefined) return fromContext;
-    const value = getValueByPath(entry, spec.path);
-    if (!isEmptyValue(value)) return value;
+    if (fromContext !== undefined) {
+      resolved = fromContext;
+    } else {
+      const value = getValueByPath(entry, spec.path);
+      if (!isEmptyValue(value)) resolved = value;
+    }
   }
 
-  if (spec.value !== undefined) return spec.value;
+  if (resolved === undefined && spec.value !== undefined) resolved = spec.value;
+
+  // extract: regex applied to the resolved string value to pull out a
+  // substring (first capture group). Lets a schema reach a value embedded in
+  // free-text (e.g. ZCode's "Primary working directory: D:\code" line in a
+  // system-prompt block) when no structured field holds it. Falls through to
+  // default/undefined when the value doesn't match.
+  if (spec.extract && typeof resolved === 'string' && resolved.length > 0) {
+    const extracted = applyExtract(resolved, spec.extract);
+    if (extracted !== undefined) return extracted;
+    // No match: fall through to default rather than returning the raw text.
+    resolved = undefined;
+  }
+
+  if (resolved !== undefined) return resolved;
 
   if (spec.default !== undefined) return spec.default;
 
   return undefined;
+}
+
+/**
+ * Apply a regex to a resolved string value and return the first capture group
+ * (trimmed). Returns undefined when there is no match or no capture group, so
+ * the caller can fall through to default. An invalid regex logs a debug warning
+ * and returns undefined (matching the matchesRule regex-error discipline).
+ */
+function applyExtract(value: string, pattern: string): string | undefined {
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern);
+  } catch (error: unknown) {
+    logger.debug('WORKER', 'CWD_DIAG applyExtract invalid-regex', { diag: 'applyExtract', pattern });
+    logger.debug('WORKER', 'Invalid regex in FieldSpec extract', { pattern }, error instanceof Error ? error : undefined);
+    return undefined;
+  }
+  const match = value.match(regex);
+  // CWD_DIAG: the cwd lives in free-text and is extracted via regex. If the
+  // regex doesn't match (system block index shifted, line wording changed), the
+  // cwd silently becomes undefined and the project falls back to the worker's
+  // startup dir. Log the match outcome and the value slice being tested.
+  logger.debug('WORKER', 'CWD_DIAG applyExtract', {
+    diag: 'applyExtract',
+    pattern,
+    valueLen: value.length,
+    matched: !!match,
+    captured: match && match[1] !== undefined ? String(match[1]).trim().slice(0, 200) : null,
+    valuePreview: value.slice(0, 160),
+  });
+  if (!match || match[1] === undefined) return undefined;
+  const captured = String(match[1]).trim();
+  return captured.length > 0 ? captured : undefined;
 }
 
 export function resolveFields(
@@ -128,7 +265,7 @@ export function matchesRule(
   // single rule combine positive and negative conditions (e.g. match a tool
   // event but exclude guardian/subagent sessions via `not_equals`/`not_in`).
   if (rule.exists !== undefined) {
-    // exists:true â†’ field must be present; exists:false â†’ field must be absent.
+    // exists:true â†?field must be present; exists:false â†?field must be absent.
     if (rule.exists && isAbsent) return false;
     if (!rule.exists && !isAbsent) return false;
   }

@@ -50,7 +50,8 @@ export type Component =
   | 'TRANSCRIPT'
   | 'TRANSCRIPT_DEBUG'
   | 'WINDSURF'
-  | 'WORKER';
+  | 'WORKER'
+  | 'ZCODE';
 
 interface LogContext {
   sessionId?: string | number;

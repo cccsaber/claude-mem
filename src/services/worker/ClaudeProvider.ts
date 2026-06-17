@@ -204,7 +204,29 @@ export class ClaudeProvider {
     const maxConcurrent = parseInt(settings.CLAUDE_MEM_MAX_CONCURRENT_AGENTS, 10) || 2;
     await waitForSlot(maxConcurrent, session.abortController.signal);
 
-    const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
+    // Per-platform endpoint override must be passed INTO buildIsolatedEnvWithFreshOAuth
+    // (not injected after) so the OAuth-lookup branch sees ANTHROPIC_BASE_URL and
+    // skips reading the keychain token entirely. If we injected after, the OAuth
+    // token would already be in the env, and the SDK subprocess could prefer it
+    // over the API key — sending a subscription token to a third-party gateway.
+    const credentialOverride = session.endpointOverride
+      ? { apiKey: session.endpointOverride.apiKey, baseUrl: session.endpointOverride.baseUrl }
+      : undefined;
+    logger.info('SDK', 'credentialOverride check', {
+      sessionDbId: session.sessionDbId,
+      hasEndpointOverride: !!session.endpointOverride,
+      hasCredentialOverride: !!credentialOverride,
+      platformSource: session.platformSource,
+      envApiKey: credentialOverride ? credentialOverride.apiKey.slice(0, 12) + '...' : '(none)',
+      envBaseUrl: credentialOverride?.baseUrl ?? '(none)',
+    });
+    const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth(true, credentialOverride));
+    logger.info('SDK', 'isolatedEnv after build', {
+      sessionDbId: session.sessionDbId,
+      hasAnthropicApiKey: !!isolatedEnv.ANTHROPIC_API_KEY,
+      hasAnthropicBaseUrl: !!isolatedEnv.ANTHROPIC_BASE_URL,
+      hasOAuthToken: !!isolatedEnv.CLAUDE_CODE_OAUTH_TOKEN,
+    });
     const authMethod = getAuthMethodDescription();
 
     logger.info('SDK', 'Starting SDK query', {

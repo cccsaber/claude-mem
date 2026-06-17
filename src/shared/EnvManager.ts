@@ -261,6 +261,7 @@ export function buildIsolatedEnv(includeCredentials: boolean = true): Record<str
  */
 export async function buildIsolatedEnvWithFreshOAuth(
   includeCredentials: boolean = true,
+  credentialOverride?: { apiKey: string; baseUrl: string },
 ): Promise<Record<string, string>> {
   const isolatedEnv = buildIsolatedEnv(includeCredentials);
 
@@ -269,6 +270,19 @@ export async function buildIsolatedEnvWithFreshOAuth(
   delete isolatedEnv.CLAUDE_CODE_OAUTH_TOKEN;
 
   if (!includeCredentials) return isolatedEnv;
+
+  // Per-session credential override (e.g. zcode → bigmodel). Inject BEFORE the
+  // OAuth-lookup branch so the BASE_URL predicate below fires and skips the
+  // keychain read entirely — the SDK subprocess then only sees the override's
+  // API key + base URL, never an OAuth token. This mirrors how ~/.claude-mem/.env
+  // works at process level, but per-session for the shared-worker case.
+  if (credentialOverride) {
+    isolatedEnv.ANTHROPIC_API_KEY = credentialOverride.apiKey;
+    isolatedEnv.ANTHROPIC_BASE_URL = credentialOverride.baseUrl;
+    delete isolatedEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    clearStaleMarker();
+    return isolatedEnv;
+  }
 
   // Custom gateway: never inject OAuth (would leak the user's Anthropic OAuth
   // token to a third-party gateway). The user must explicitly configure a

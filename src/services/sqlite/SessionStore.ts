@@ -1703,11 +1703,33 @@ export class SessionStore {
     const storedUserPrompt = normalizeStoredPromptText(userPrompt);
 
     const existing = this.db.prepare(`
-      SELECT id, platform_source FROM sdk_sessions WHERE content_session_id = ?
-    `).get(contentSessionId) as { id: number; platform_source: string | null } | undefined;
+      SELECT id, platform_source, project FROM sdk_sessions WHERE content_session_id = ?
+    `).get(contentSessionId) as { id: number; platform_source: string | null; project: string | null } | undefined;
+
+    // CWD_DIAG: log the lookup-or-create decision so a mis-attribution is
+    // traceable to its source. The write-once project guard below means the
+    // FIRST non-empty project value wins — if that first value came from a
+    // process.cwd() fallback, the session is wrong forever.
+    logger.debug('SESSION', 'CWD_DIAG createSDKSession', {
+      diag: 'createSDKSession',
+      contentSessionId,
+      incomingProject: project,
+      platformSource: normalizedPlatformSource,
+      existing: !!existing,
+      existingId: existing?.id ?? null,
+      existingProject: existing?.project ?? null,
+    });
 
     if (existing) {
       if (project) {
+        // CWD_DIAG: show whether the update actually applies (existing non-empty
+        // project blocks it — the write-once guard).
+        const existingEmpty = !existing.project || existing.project === '';
+        logger.debug('SESSION', 'CWD_DIAG createSDKSession write-once-guard', {
+          diag: 'createSDKSession-update',
+          contentSessionId, incomingProject: project,
+          existingProject: existing.project, willUpdate: existingEmpty,
+        });
         this.db.prepare(`
           UPDATE sdk_sessions SET project = ?
           WHERE content_session_id = ? AND (project IS NULL OR project = '')

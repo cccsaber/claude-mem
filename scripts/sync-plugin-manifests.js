@@ -12,6 +12,8 @@ const codexPluginPath = path.join(rootDir, '.codex-plugin', 'plugin.json');
 const bundledCodexPluginPath = path.join(rootDir, 'plugin', '.codex-plugin', 'plugin.json');
 const claudePluginPath = path.join(rootDir, '.claude-plugin', 'plugin.json');
 const bundledClaudePluginPath = path.join(rootDir, 'plugin', '.claude-plugin', 'plugin.json');
+const zcodePluginPath = path.join(rootDir, '.zcode-plugin', 'plugin.json');
+const bundledZcodePluginPath = path.join(rootDir, 'plugin', '.zcode-plugin', 'plugin.json');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -77,7 +79,7 @@ function normalizeRepositoryUrl(repository) {
 }
 
 function main() {
-  for (const filePath of [packageJsonPath, codexPluginPath, bundledCodexPluginPath, claudePluginPath, bundledClaudePluginPath]) {
+  for (const filePath of [packageJsonPath, codexPluginPath, bundledCodexPluginPath, claudePluginPath, bundledClaudePluginPath, zcodePluginPath, bundledZcodePluginPath]) {
     if (!fs.existsSync(filePath)) {
       console.error(`Missing required file: ${filePath}`);
       process.exit(1);
@@ -89,11 +91,17 @@ function main() {
   const bundledCodexPlugin = readJson(bundledCodexPluginPath);
   const claudePlugin = readJson(claudePluginPath);
   const bundledClaudePlugin = readJson(bundledClaudePluginPath);
+  const zcodePlugin = readJson(zcodePluginPath);
+  const bundledZcodePlugin = readJson(bundledZcodePluginPath);
 
   writeJson(codexPluginPath, syncCodexPlugin(codexPlugin, pkg));
   writeJson(bundledCodexPluginPath, syncCodexPlugin(bundledCodexPlugin, pkg));
   writeJson(claudePluginPath, syncClaudePlugin(claudePlugin, pkg));
   writeJson(bundledClaudePluginPath, syncClaudePlugin(bundledClaudePlugin, pkg));
+  // The ZCode manifest mirrors the Claude-Code manifest shape (skills/mcp/
+  // hooks/interface), so reuse syncClaudePlugin for version/author/etc. sync.
+  writeJson(zcodePluginPath, syncClaudePlugin(zcodePlugin, pkg));
+  writeJson(bundledZcodePluginPath, syncClaudePlugin(bundledZcodePlugin, pkg));
 
   console.log('✓ Synced plugin manifests from package.json');
 }

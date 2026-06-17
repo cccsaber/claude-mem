@@ -74,6 +74,10 @@ function shellTemplateManifest(buildShellCommand) {
     host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
     trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found',
   });
+  const zcodeHook = (tail, extra = {}) => buildShellCommand({
+    host: 'zcode-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
+    trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found', ...extra,
+  });
 
   return {
     'plugin/hooks/hooks.json': {
@@ -106,6 +110,20 @@ function shellTemplateManifest(buildShellCommand) {
         'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
         'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
         'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
+      },
+    },
+    'plugin/hooks/zcode-hooks.json': {
+      kind: 'hooks',
+      commands: {
+        // ZCode SessionStart reuses the claude-code shape: bootstrap the
+        // worker (with the continue/suppressOutput marker), then inject
+        // context. There is no Setup/version-check step for ZCode.
+        'SessionStart.0.0': zcodeHook(['start'], { trailingJson: { continue: true, suppressOutput: true } }),
+        'SessionStart.0.1': zcodeHook(['hook', 'zcode', 'context']),
+        'UserPromptSubmit.0.0': zcodeHook(['hook', 'zcode', 'session-init']),
+        'PreToolUse.0.0': zcodeHook(['hook', 'zcode', 'file-context']),
+        'PostToolUse.0.0': zcodeHook(['hook', 'zcode', 'observation']),
+        'Stop.0.0': zcodeHook(['hook', 'zcode', 'summarize']),
       },
     },
     'plugin/.mcp.json': {
@@ -616,9 +634,11 @@ async function buildHooks() {
       'plugin/skills/how-it-works/onboarding-explainer.md',
       'plugin/hooks/hooks.json',
       'plugin/hooks/codex-hooks.json',
+      'plugin/hooks/zcode-hooks.json',
       'plugin/scripts/bun-runner.js',
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
+      'plugin/.zcode-plugin/plugin.json',
       'plugin/.mcp.json',
       '.codex-plugin/plugin.json',
       '.agents/plugins/marketplace.json',

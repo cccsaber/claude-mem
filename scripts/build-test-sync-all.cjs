@@ -40,6 +40,38 @@ function run(command, commandArgs, options = {}) {
   });
 }
 
+function commandOutputOrUnknown(command, commandArgs) {
+  if (dryRun) {
+    return 'unknown (dry-run)';
+  }
+  try {
+    return execFileSync(commandName(command), commandArgs, {
+      cwd: rootDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function writeInstallMarker(targetDir) {
+  const markerPath = path.join(targetDir, '.install-version');
+  const payload = {
+    version,
+    bun: commandOutputOrUnknown('bun', ['--version']),
+    uv: commandOutputOrUnknown('uv', ['--version']),
+    installedAt: new Date().toISOString(),
+  };
+
+  if (dryRun) {
+    console.log(`[dry-run] write ${markerPath}`);
+    return;
+  }
+
+  fs.writeFileSync(markerPath, `${JSON.stringify(payload)}\n`, 'utf-8');
+}
+
 function assertInside(root, target) {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
@@ -140,11 +172,13 @@ function syncPluginCache({ name, root, target }) {
   console.log(`  from: ${pluginDir}`);
   console.log(`  to:   ${target}`);
 
-  mirrorDir(pluginDir, target, target, { preserveNames: new Set(['node_modules']) });
+  mirrorDir(pluginDir, target, target, { preserveNames: new Set(['node_modules', '.install-version']) });
 
   if (fs.existsSync(path.join(target, 'package.json'))) {
     run('bun', ['install'], { cwd: target });
   }
+
+  writeInstallMarker(target);
 }
 
 function codexHookStateEventName(eventName) {
@@ -324,10 +358,18 @@ function syncClaudeCode() {
   console.log('\nSyncing Claude Code marketplace');
   console.log(`  from: ${rootDir}`);
   console.log(`  to:   ${marketplaceTarget}`);
-  mirrorDir(rootDir, marketplaceTarget, marketplaceTarget, { shouldSkip: shouldSkipRootSync });
+  mirrorDir(rootDir, marketplaceTarget, marketplaceTarget, {
+    preserveNames: new Set(['.install-version']),
+    shouldSkip: shouldSkipRootSync,
+  });
 
   if (fs.existsSync(path.join(marketplaceTarget, 'package.json'))) {
     run('bun', ['install'], { cwd: marketplaceTarget });
+  }
+
+  const marketplacePluginTarget = path.join(marketplaceTarget, 'plugin');
+  if (fs.existsSync(path.join(marketplacePluginTarget, 'package.json'))) {
+    writeInstallMarker(marketplacePluginTarget);
   }
 
   syncPluginCache({

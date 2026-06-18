@@ -5,6 +5,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { logger } from '../../../../utils/logger.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
+import { normalizeProjectIdentifier } from '../../../../utils/project-name.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 
 const saveMemorySchema = z.object({
@@ -35,7 +36,7 @@ export class MemoryRoutes extends BaseRouteHandler {
     const metadataProject = typeof metadata?.project === 'string' && metadata.project.trim()
       ? metadata.project.trim()
       : undefined;
-    const targetProject = explicitProject || metadataProject || this.defaultProject;
+    const targetProject = normalizeProjectIdentifier(explicitProject || metadataProject) || this.defaultProject;
     const metadataPlatformSource = typeof metadata?.platformSource === 'string' && metadata.platformSource.trim()
       ? metadata.platformSource.trim()
       : undefined;

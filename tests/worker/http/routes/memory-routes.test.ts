@@ -136,6 +136,19 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
     expect(storeObservationCalls[0][1]).toBe('top-level-project');
   });
 
+  it('normalizes path-like project values before creating manual sessions', () => {
+    const handler = buildHandler();
+    const { req, res } = createMockReqRes({
+      text: 'hello',
+      project: 'D:\\code\\db',
+      platformSource: 'codex',
+    });
+    handler(req as Request, res as Response);
+
+    expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('db', 'codex');
+    expect(storeObservationCalls[0][1]).toBe('db');
+  });
+
   it('falls back to metadata.project when top-level project is omitted (#2116)', () => {
     const handler = buildHandler();
     const { req, res } = createMockReqRes({
@@ -146,6 +159,18 @@ describe('MemoryRoutes — POST /api/memory/save (#2116)', () => {
 
     expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('my-custom-project');
     expect(storeObservationCalls[0][1]).toBe('my-custom-project');
+  });
+
+  it('normalizes path-like metadata.project fallback values', () => {
+    const handler = buildHandler();
+    const { req, res } = createMockReqRes({
+      text: 'hello',
+      metadata: { project: 'D:\\code\\db', platformSource: 'codex' },
+    });
+    handler(req as Request, res as Response);
+
+    expect(mockGetOrCreateManualSession).toHaveBeenCalledWith('db', 'codex');
+    expect(storeObservationCalls[0][1]).toBe('db');
   });
 
   it('threads platformSource into manual sessions when provided', () => {

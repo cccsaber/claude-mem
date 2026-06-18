@@ -66,6 +66,7 @@ describe('MCP tool inputSchema declarations', () => {
     expect(section).toContain('resolveServerBetaToolContext');
     expect(section).toContain("callWorkerAPIPost('/api/memory/save'");
     expect(section).toContain('buildWorkerMemorySaveRequest');
+    expect(section).toContain('normalizeProjectIdentifier');
     expect(section).toContain('inferMcpPlatformSource');
     expect(section).toContain('/.codex/plugins/cache/');
     expect(section).not.toContain("requireServerBetaForObservationTool('observation_add')");

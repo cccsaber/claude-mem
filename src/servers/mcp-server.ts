@@ -3,6 +3,7 @@ declare const __DEFAULT_PACKAGE_VERSION__: string;
 const packageVersion = typeof __DEFAULT_PACKAGE_VERSION__ !== 'undefined' ? __DEFAULT_PACKAGE_VERSION__ : '0.0.0-dev';
 
 import { logger } from '../utils/logger.js';
+import { normalizeProjectIdentifier } from '../utils/project-name.js';
 
 console['log'] = (...args: any[]) => {
   logger.error('CONSOLE', 'Intercepted console output (MCP protocol protection)', undefined, { args });
@@ -298,7 +299,7 @@ function buildWorkerMemorySaveRequest(args: ObservationAddArgs): WorkerMemorySav
     metadata.serverSessionId = args.serverSessionId;
   }
 
-  const project = args.projectId && args.projectId.trim().length > 0 ? args.projectId.trim() : undefined;
+  const project = normalizeProjectIdentifier(args.projectId);
   const title = typeof metadata.title === 'string' && metadata.title.trim().length > 0
     ? metadata.title
     : undefined;

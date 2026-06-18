@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { DATA_DIR, DB_PATH, ensureDir, OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
+import { normalizeProjectIdentifier } from '../../utils/project-name.js';
 import {
   TableColumnInfo,
   IndexInfo,
@@ -2565,14 +2566,15 @@ export class SessionStore {
   }
 
   getOrCreateManualSession(project: string, platformSource?: string): string {
+    const normalizedProject = normalizeProjectIdentifier(project) || project;
     const normalizedPlatformSource = platformSource
       ? normalizePlatformSource(platformSource)
       : DEFAULT_PLATFORM_SOURCE;
     const sourcePrefix = normalizedPlatformSource === DEFAULT_PLATFORM_SOURCE
       ? ''
       : `${normalizedPlatformSource}-`;
-    const memorySessionId = `manual-${sourcePrefix}${project}`;
-    const contentSessionId = `manual-content-${sourcePrefix}${project}`;
+    const memorySessionId = `manual-${sourcePrefix}${normalizedProject}`;
+    const contentSessionId = `manual-content-${sourcePrefix}${normalizedProject}`;
 
     const existing = this.db.prepare(
       'SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id = ?'
@@ -2586,9 +2588,9 @@ export class SessionStore {
     this.db.prepare(`
       INSERT INTO sdk_sessions (memory_session_id, content_session_id, project, platform_source, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, ?, 'active')
-    `).run(memorySessionId, contentSessionId, project, normalizedPlatformSource, now.toISOString(), now.getTime());
+    `).run(memorySessionId, contentSessionId, normalizedProject, normalizedPlatformSource, now.toISOString(), now.getTime());
 
-    logger.info('SESSION', 'Created manual session', { memorySessionId, project, platformSource: normalizedPlatformSource });
+    logger.info('SESSION', 'Created manual session', { memorySessionId, project: normalizedProject, platformSource: normalizedPlatformSource });
 
     return memorySessionId;
   }

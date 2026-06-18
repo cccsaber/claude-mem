@@ -1,13 +1,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { homedir } from 'os';
-import { getProjectName, getProjectContext } from '../../src/utils/project-name.js';
+import { getProjectName, getProjectContext, normalizeProjectIdentifier } from '../../src/utils/project-name.js';
 
 describe('getProjectName', () => {
   describe('tilde expansion', () => {
     it('resolves bare ~ to home directory basename', () => {
       const home = homedir();
-      const expected = home.split('/').pop() || home.split('\\').pop() || '';
+      const expected = home.split(/[\\/]/).pop() || '';
       expect(getProjectName('~')).toBe(expected);
     });
 
@@ -17,7 +17,7 @@ describe('getProjectName', () => {
 
     it('resolves ~/ to home directory basename', () => {
       const home = homedir();
-      const expected = home.split('/').pop() || home.split('\\').pop() || '';
+      const expected = home.split(/[\\/]/).pop() || '';
       expect(getProjectName('~/')).toBe(expected);
     });
   });
@@ -173,5 +173,21 @@ describe('getProjectContext', () => {
       expect(project).not.toBe('main-repo');
       expect(project).not.toBe('my-worktree');
     });
+  });
+});
+
+describe('normalizeProjectIdentifier', () => {
+  it('normalizes absolute Windows cwd values to the project name', () => {
+    expect(normalizeProjectIdentifier('D:\\code\\db')).toBe('db');
+    expect(normalizeProjectIdentifier('D:/code/db')).toBe('db');
+  });
+
+  it('normalizes absolute POSIX cwd values to the project name', () => {
+    expect(normalizeProjectIdentifier('/home/user/code/db')).toBe('db');
+  });
+
+  it('preserves plain project identifiers and worktree composites', () => {
+    expect(normalizeProjectIdentifier('db')).toBe('db');
+    expect(normalizeProjectIdentifier('main-repo/my-worktree')).toBe('main-repo/my-worktree');
   });
 });

@@ -4,11 +4,42 @@ import { execFileSync } from 'child_process';
 import { logger } from './logger.js';
 import { detectWorktree } from './worktree.js';
 
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const WINDOWS_DRIVE_ROOT_RE = /^[A-Za-z]:[\\/]?$/;
+const WINDOWS_UNC_PATH_RE = /^\\\\/;
+const RELATIVE_PATH_RE = /^\.{1,2}([\\/]|$)/;
+
 function expandTilde(p: string): string {
   if (p === '~' || p.startsWith('~/')) {
     return p.replace(/^~/, homedir())
   }
+  if (p.startsWith('~\\')) {
+    return p.replace(/^~/, homedir())
+  }
   return p
+}
+
+function basenameCrossPlatform(p: string): string {
+  if (
+    WINDOWS_ABSOLUTE_PATH_RE.test(p)
+    || WINDOWS_DRIVE_ROOT_RE.test(p)
+    || WINDOWS_UNC_PATH_RE.test(p)
+    || p.includes('\\')
+  ) {
+    return path.win32.basename(p);
+  }
+  return path.basename(p);
+}
+
+function looksLikePath(value: string): boolean {
+  return value === '~'
+    || value.startsWith('~/')
+    || value.startsWith('~\\')
+    || value.startsWith('/')
+    || WINDOWS_ABSOLUTE_PATH_RE.test(value)
+    || WINDOWS_DRIVE_ROOT_RE.test(value)
+    || WINDOWS_UNC_PATH_RE.test(value)
+    || RELATIVE_PATH_RE.test(value);
 }
 
 /**
@@ -46,12 +77,12 @@ export function getProjectName(cwd: string | null | undefined): string {
   const repoRoot = findGitRepoRoot(expanded);
   const nameSource = repoRoot ?? expanded;
 
-  const basename = path.basename(nameSource);
+  const basename = basenameCrossPlatform(nameSource);
 
   if (basename === '') {
     const isWindows = process.platform === 'win32';
-    if (isWindows) {
-      const driveMatch = cwd.match(/^([A-Z]):\\/i);
+    const driveMatch = cwd.match(/^([A-Z]):[\\/]?$/i);
+    if (isWindows || driveMatch) {
       if (driveMatch) {
         const driveLetter = driveMatch[1].toUpperCase();
         const projectName = `drive-${driveLetter}`;
@@ -64,6 +95,12 @@ export function getProjectName(cwd: string | null | undefined): string {
   }
 
   return basename;
+}
+
+export function normalizeProjectIdentifier(project: string | null | undefined): string | undefined {
+  const trimmed = project?.trim();
+  if (!trimmed) return undefined;
+  return looksLikePath(trimmed) ? getProjectContext(trimmed).primary : trimmed;
 }
 
 export interface ProjectContext {

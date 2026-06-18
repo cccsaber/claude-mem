@@ -91,4 +91,31 @@ describe('SessionStore platform source attribution', () => {
       { memory_session_id: 'manual-db', platform_source: 'claude' },
     ]);
   });
+
+  it('normalizes path-like manual session projects before deriving ids', () => {
+    const db = new Database(':memory:');
+    store = new SessionStore(db);
+
+    const codexManualSession = store.getOrCreateManualSession('D:\\code\\db', 'codex');
+
+    expect(codexManualSession).toBe('manual-codex-db');
+
+    const row = store.db.prepare(`
+      SELECT memory_session_id, content_session_id, project, platform_source
+        FROM sdk_sessions
+       WHERE memory_session_id = ?
+    `).get(codexManualSession) as {
+      memory_session_id: string;
+      content_session_id: string;
+      project: string;
+      platform_source: string;
+    };
+
+    expect(row).toEqual({
+      memory_session_id: 'manual-codex-db',
+      content_session_id: 'manual-content-codex-db',
+      project: 'db',
+      platform_source: 'codex',
+    });
+  });
 });

@@ -27,6 +27,7 @@ async function dispatchToWorker(
       cwd: input.cwd,
       agentId: input.agentId,
       agentType: input.agentType,
+      toolUseId: input.toolUseId,
     },
   );
 
@@ -38,62 +39,67 @@ async function dispatchToWorker(
   return { continue: true, suppressOutput: true };
 }
 
-export const observationHandler: EventHandler = {
-  async execute(input: NormalizedHookInput): Promise<HookResult> {
-    const { sessionId, cwd, toolName, toolInput, toolResponse } = input;
-    const platformSource = normalizePlatformSource(input.platform);
+export async function recordObservationInput(input: NormalizedHookInput): Promise<HookResult> {
+  const { sessionId, cwd, toolName } = input;
+  const platformSource = normalizePlatformSource(input.platform);
 
-    if (!toolName) {
-      return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
-    }
+  if (!toolName) {
+    return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
+  }
 
-    const toolStr = logger.formatTool(toolName, toolInput);
+  const toolStr = logger.formatTool(toolName, input.toolInput);
 
-    logger.dataIn('HOOK', `PostToolUse: ${toolStr}`, {});
+  logger.dataIn('HOOK', `${input.hookEventName ?? 'PostToolUse'}: ${toolStr}`, {});
 
-    if (!cwd) {
-      throw new Error(`Missing cwd in PostToolUse hook input for session ${sessionId}, tool ${toolName}`);
-    }
+  if (!cwd) {
+    throw new Error(`Missing cwd in PostToolUse hook input for session ${sessionId}, tool ${toolName}`);
+  }
 
-    if (!shouldTrackProject(cwd)) {
-      logger.debug('HOOK', 'Project excluded from tracking, skipping observation', { cwd, toolName });
+  if (!shouldTrackProject(cwd)) {
+    logger.debug('HOOK', 'Project excluded from tracking, skipping observation', { cwd, toolName });
+    return { continue: true, suppressOutput: true };
+  }
+
+  const runtime = resolveRuntimeContext();
+  if (runtime.runtime === 'server-beta') {
+    try {
+      await runtime.client.recordEvent({
+        projectId: runtime.projectId,
+        contentSessionId: sessionId,
+        sourceType: 'hook',
+        eventType: 'tool_use',
+        occurredAtEpoch: Date.now(),
+        payload: {
+          tool_name: toolName,
+          tool_input: input.toolInput,
+          tool_response: input.toolResponse,
+          tool_use_id: input.toolUseId,
+          cwd,
+          agentId: input.agentId,
+          agentType: input.agentType,
+          platformSource,
+        },
+      });
+      logger.debug('HOOK', 'Observation sent successfully via server-beta', { toolName });
       return { continue: true, suppressOutput: true };
-    }
-
-    const runtime = resolveRuntimeContext();
-    if (runtime.runtime === 'server-beta') {
-      try {
-        await runtime.client.recordEvent({
-          projectId: runtime.projectId,
-          contentSessionId: sessionId,
-          sourceType: 'hook',
-          eventType: 'tool_use',
-          occurredAtEpoch: Date.now(),
-          payload: {
-            tool_name: toolName,
-            tool_input: toolInput,
-            tool_response: toolResponse,
-            cwd,
-            agentId: input.agentId,
-            agentType: input.agentType,
-            platformSource,
-          },
+    } catch (error: unknown) {
+      if (isServerBetaClientError(error) && error.isFallbackEligible()) {
+        logServerBetaFallback(error.kind, { status: error.status, message: error.message, route: '/v1/events' });
+        // fall through to worker fallback
+      } else {
+        logger.error('HOOK', 'Server beta event failed (non-recoverable)', {
+          error: error instanceof Error ? error.message : String(error),
         });
-        logger.debug('HOOK', 'Observation sent successfully via server-beta', { toolName });
-        return { continue: true, suppressOutput: true };
-      } catch (error: unknown) {
-        if (isServerBetaClientError(error) && error.isFallbackEligible()) {
-          logServerBetaFallback(error.kind, { status: error.status, message: error.message, route: '/v1/events' });
-          // fall through to worker fallback
-        } else {
-          logger.error('HOOK', 'Server beta event failed (non-recoverable)', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
-        }
+        return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
       }
     }
+  }
 
-    return dispatchToWorker(input, platformSource);
+  return dispatchToWorker(input, platformSource);
+}
+
+export const observationHandler: EventHandler = {
+  async execute(input: NormalizedHookInput): Promise<HookResult> {
+    return recordObservationInput(input);
   },
 };

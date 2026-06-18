@@ -2,22 +2,26 @@ export interface NormalizedHookInput {
   sessionId: string;
   cwd: string;
   platform?: string;   
+  hookEventName?: string;
   prompt?: string;
   toolName?: string;
   toolInput?: unknown;
   toolResponse?: unknown;
+  toolUseId?: string;
   transcriptPath?: string;
   lastAssistantMessage?: string;
   turnId?: string;
   stopHookActive?: boolean;
   permissionMode?: string;
   model?: string;
-  sessionSource?: 'startup' | 'resume' | 'clear';
+  sessionSource?: 'startup' | 'resume' | 'clear' | 'compact';
+  trigger?: 'manual' | 'auto';
   filePath?: string;   
   edits?: unknown[];   
   metadata?: Record<string, unknown>;
   agentId?: string;      
   agentType?: string;    
+  agentTranscriptPath?: string;
 }
 
 export interface HookResult {

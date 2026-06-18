@@ -6,7 +6,11 @@ type CodexEventName =
   | 'PreToolUse'
   | 'PermissionRequest'
   | 'PostToolUse'
+  | 'PreCompact'
+  | 'PostCompact'
   | 'SessionStart'
+  | 'SubagentStart'
+  | 'SubagentStop'
   | 'UserPromptSubmit'
   | 'Stop';
 
@@ -14,10 +18,16 @@ const EVENT_NAMES = new Set<CodexEventName>([
   'PreToolUse',
   'PermissionRequest',
   'PostToolUse',
+  'PreCompact',
+  'PostCompact',
   'SessionStart',
+  'SubagentStart',
+  'SubagentStop',
   'UserPromptSubmit',
   'Stop',
 ]);
+
+const MAX_AGENT_FIELD_LEN = 128;
 
 function eventName(value: unknown): CodexEventName | undefined {
   return typeof value === 'string' && EVENT_NAMES.has(value as CodexEventName)
@@ -34,6 +44,16 @@ function booleanOrUndefined(value: unknown): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return undefined;
+}
+
+function agentFieldOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_AGENT_FIELD_LEN
+    ? value
+    : undefined;
+}
+
+function triggerOrUndefined(value: unknown): 'manual' | 'auto' | undefined {
+  return value === 'manual' || value === 'auto' ? value : undefined;
 }
 
 function cloneToolInput(toolInput: unknown): unknown {
@@ -77,7 +97,7 @@ export const codexAdapter: PlatformAdapter = {
 
     const source = r.source;
     const sessionSource =
-      source === 'startup' || source === 'resume' || source === 'clear'
+      source === 'startup' || source === 'resume' || source === 'clear' || source === 'compact'
         ? source
         : undefined;
     const sessionId = stringOrUndefined(r.session_id);
@@ -88,10 +108,12 @@ export const codexAdapter: PlatformAdapter = {
     return {
       sessionId,
       cwd,
+      hookEventName,
       prompt: stringOrUndefined(r.prompt),
       toolName,
       toolInput,
       toolResponse: r.tool_response,
+      toolUseId: stringOrUndefined(r.tool_use_id),
       transcriptPath: stringOrUndefined(r.transcript_path),
       lastAssistantMessage: stringOrUndefined(r.last_assistant_message),
       turnId: stringOrUndefined(r.turn_id),
@@ -99,6 +121,10 @@ export const codexAdapter: PlatformAdapter = {
       permissionMode: stringOrUndefined(r.permission_mode),
       model: stringOrUndefined(r.model),
       sessionSource,
+      trigger: triggerOrUndefined(r.trigger),
+      agentId: agentFieldOrUndefined(r.agent_id),
+      agentType: agentFieldOrUndefined(r.agent_type),
+      agentTranscriptPath: stringOrUndefined(r.agent_transcript_path),
     };
   },
 

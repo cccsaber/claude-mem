@@ -108,7 +108,12 @@ function shellTemplateManifest(buildShellCommand) {
         'SessionStart.0.2': codexHook(['hook', 'codex', 'context']),
         'UserPromptSubmit.0.0': codexHook(['hook', 'codex', 'session-init']),
         'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
+        'PermissionRequest.0.0': codexHook(['hook', 'codex', 'lifecycle-observation']),
         'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
+        'PreCompact.0.0': codexHook(['hook', 'codex', 'lifecycle-observation']),
+        'PostCompact.0.0': codexHook(['hook', 'codex', 'lifecycle-observation']),
+        'SubagentStart.0.0': codexHook(['hook', 'codex', 'lifecycle-observation']),
+        'SubagentStop.0.0': codexHook(['hook', 'codex', 'lifecycle-observation']),
         'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
       },
     },
@@ -624,6 +629,10 @@ async function buildHooks() {
       'PreToolUse',
       'PermissionRequest',
       'PostToolUse',
+      'PreCompact',
+      'PostCompact',
+      'SubagentStart',
+      'SubagentStop',
       'Stop',
     ]);
     const requiredDistributionFiles = [

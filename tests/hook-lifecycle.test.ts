@@ -23,7 +23,8 @@ describe('Hook Lifecycle - Event Handlers', () => {
       const { getEventHandler } = await import('../src/cli/handlers/index.js');
       const recognizedTypes = [
         'context', 'session-init', 'observation',
-        'summarize', 'user-message', 'file-edit', 'file-context'
+        'summarize', 'user-message', 'file-edit', 'file-context',
+        'lifecycle-observation'
       ];
       for (const type of recognizedTypes) {
         const handler = getEventHandler(type);
@@ -135,6 +136,74 @@ describe('Codex CLI Compatibility (#744)', () => {
       expect(inactive.stopHookActive).toBe(false);
     });
 
+    it('normalizes SessionStart compact source', async () => {
+      const { codexAdapter } = await import('../src/cli/adapters/codex.js');
+      const input = codexAdapter.normalizeInput({
+        hook_event_name: 'SessionStart',
+        session_id: 'codex-session',
+        cwd: '/tmp',
+        source: 'compact',
+      });
+
+      expect(input.hookEventName).toBe('SessionStart');
+      expect(input.sessionSource).toBe('compact');
+    });
+
+    it('normalizes compact trigger payloads', async () => {
+      const { codexAdapter } = await import('../src/cli/adapters/codex.js');
+      const input = codexAdapter.normalizeInput({
+        hook_event_name: 'PreCompact',
+        session_id: 'codex-session',
+        cwd: '/tmp',
+        turn_id: 'turn-compact',
+        trigger: 'auto',
+      });
+
+      expect(input.hookEventName).toBe('PreCompact');
+      expect(input.turnId).toBe('turn-compact');
+      expect(input.trigger).toBe('auto');
+    });
+
+    it('normalizes PermissionRequest payloads with tool_use_id', async () => {
+      const { codexAdapter } = await import('../src/cli/adapters/codex.js');
+      const input = codexAdapter.normalizeInput({
+        hook_event_name: 'PermissionRequest',
+        session_id: 'codex-session',
+        cwd: '/tmp',
+        turn_id: 'turn-permission',
+        tool_name: 'Bash',
+        tool_use_id: 'tool-123',
+        tool_input: { command: 'npm test', description: 'Run tests' },
+      });
+
+      expect(input.hookEventName).toBe('PermissionRequest');
+      expect(input.toolName).toBe('Bash');
+      expect(input.toolUseId).toBe('tool-123');
+      expect(input.toolInput).toEqual({ command: 'npm test', description: 'Run tests' });
+    });
+
+    it('normalizes SubagentStop agent fields', async () => {
+      const { codexAdapter } = await import('../src/cli/adapters/codex.js');
+      const input = codexAdapter.normalizeInput({
+        hook_event_name: 'SubagentStop',
+        session_id: 'codex-session',
+        cwd: '/tmp',
+        turn_id: 'turn-subagent',
+        agent_id: 'agent-abc',
+        agent_type: 'Explore',
+        agent_transcript_path: '/tmp/subagent.jsonl',
+        last_assistant_message: 'subagent done',
+        stop_hook_active: false,
+      });
+
+      expect(input.hookEventName).toBe('SubagentStop');
+      expect(input.agentId).toBe('agent-abc');
+      expect(input.agentType).toBe('Explore');
+      expect(input.agentTranscriptPath).toBe('/tmp/subagent.jsonl');
+      expect(input.lastAssistantMessage).toBe('subagent done');
+      expect(input.stopHookActive).toBe(false);
+    });
+
     it('rejects payloads without a session_id', async () => {
       const { codexAdapter } = await import('../src/cli/adapters/codex.js');
       const { AdapterRejectedInput } = await import('../src/cli/adapters/errors.js');
@@ -181,7 +250,7 @@ describe('Codex CLI Compatibility (#744)', () => {
       expect(input.toolInput).toBe('cat README.md');
     });
 
-    it('drops PreToolUse allow decisions because Codex only accepts deny', async () => {
+    it('drops bare PreToolUse allow decisions when there is no updated input', async () => {
       const { codexAdapter } = await import('../src/cli/adapters/codex.js');
       const output = codexAdapter.formatOutput({
         hookSpecificOutput: {
